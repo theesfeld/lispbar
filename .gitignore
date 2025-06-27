@@ -1,0 +1,75 @@
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Org-mode
+.org-id-locations
+*_archive
+
+# flymake-mode
+*_flymake.*
+
+# eshell files
+/eshell/history
+/eshell/lastdir
+
+# elpa packages
+/elpa/
+
+# reftex files
+*.rel
+
+# AUCTeX auto folder
+/auto/
+
+# cask packages
+.cask/
+dist/
+
+# Byte-compiled files
+*.elc
+
+# Build artifacts
+/build/
+/dist/
+
+# Test coverage
+/.coverage/
+/coverage/
+
+# Documentation build
+/doc/_build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local configuration
+/local-config.el
+
+# Backup files
+*.bak
+*.orig
+
+# Log files
+*.log
+
+# Package files
+lispbar-pkg.el
+*.tar
+
+# TAGS files
+TAGS
+tags

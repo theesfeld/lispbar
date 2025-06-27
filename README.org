@@ -1,0 +1,130 @@
+#+TITLE: Lispbar - A Pure Elisp Toolbar for EXWM
+#+AUTHOR: Your Name
+#+EMAIL: your.email@example.com
+
+* Overview
+
+Lispbar is a pure Emacs Lisp toolbar package designed specifically for EXWM (Emacs X Window Manager) users. It provides a modular, theme-aware, and highly customizable toolbar system with built-in modules for:
+
+- Battery status monitoring
+- Network connection display
+- Clock and date
+- EXWM workspace management
+- Custom user modules
+
+* Features
+
+- *Pure Elisp*: No external dependencies
+- *EXWM Native*: Deep integration with EXWM
+- *Theme Aware*: Automatically adapts to your Emacs theme
+- *Modular Design*: Easy to extend with custom modules
+- *Multi-Monitor Support*: Works across multiple displays
+- *Performance Focused*: Efficient updates and rendering
+
+* Requirements
+
+- Emacs 27.1 or later
+- EXWM 0.24 or later
+
+* Installation
+
+** Manual Installation
+
+Clone the repository and add to your load path:
+
+#+begin_src elisp
+(add-to-list 'load-path "/path/to/lispbar")
+(require 'lispbar)
+#+end_src
+
+** Using straight.el
+
+#+begin_src elisp
+(straight-use-package
+ '(lispbar :type git :host github :repo "theesfeld/lispbar"))
+#+end_src
+
+** Using use-package
+
+#+begin_src elisp
+(use-package lispbar
+  :after exwm
+  :config
+  (lispbar-mode 1))
+#+end_src
+
+* Configuration
+
+** Basic Setup
+
+#+begin_src elisp
+(use-package lispbar
+  :after exwm
+  :custom
+  (lispbar-position 'top)
+  (lispbar-height 28)
+  (lispbar-modules-left '(workspace))
+  (lispbar-modules-center '(clock))
+  (lispbar-modules-right '(network battery))
+  :config
+  (lispbar-mode 1))
+#+end_src
+
+** Module Configuration
+
+*** Battery Module
+
+#+begin_src elisp
+(setq lispbar-battery-format "{icon} {percentage}%")
+(setq lispbar-battery-low-threshold 20)
+(setq lispbar-battery-critical-threshold 10)
+#+end_src
+
+*** Clock Module
+
+#+begin_src elisp
+(setq lispbar-clock-format "%H:%M")
+(setq lispbar-clock-show-date t)
+(setq lispbar-clock-date-format "%Y-%m-%d")
+#+end_src
+
+*** Network Module
+
+#+begin_src elisp
+(setq lispbar-network-show-details t)
+(setq lispbar-network-interfaces '("wlan0" "eth0"))
+#+end_src
+
+* Creating Custom Modules
+
+#+begin_src elisp
+(lispbar-define-module example
+  :slots ((format :initform "Example: {value}"))
+  :update-fn (format "Value: %s" (random 100)))
+
+(add-to-list 'lispbar-modules-right 'example)
+#+end_src
+
+* Development
+
+** Running Tests
+
+#+begin_src shell
+make test
+#+end_src
+
+** Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests and linting
+5. Submit a pull request
+
+* License
+
+GPL-3.0-or-later
+
+* Acknowledgments
+
+This project follows GNU Emacs coding conventions and is inspired by various status bar implementations in the Emacs ecosystem.
