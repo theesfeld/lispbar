@@ -15,26 +15,26 @@ Lispbar is a pure Emacs Lisp toolbar package for EXWM. This document contains sp
 2. **File Structure**:
    ```
    ;;; lispbar-module.el --- Description -*- lexical-binding: t -*-
-   
+
    ;; Copyright (C) 2025 Free Software Foundation, Inc.
-   
+
    ;; Author: Your Name
    ;; Version: 0.1.0
    ;; Package-Requires: ((emacs "27.1") (exwm "0.24"))
    ;; Keywords: frames, exwm
    ;; URL: https://github.com/yourusername/lispbar
-   
+
    ;;; Commentary:
-   
+
    ;; Detailed description here
-   
+
    ;;; Code:
-   
+
    (require 'cl-lib)
    (require 'eieio)
-   
+
    ;; ... code ...
-   
+
    (provide 'lispbar-module)
    ;;; lispbar-module.el ends here
    ```
@@ -250,3 +250,5 @@ Before any release:
 - Profile before optimizing
 - Document as you code
 - Ask for clarification if needed
+- Use sub agents when necessary
+- Make use of MCP and tools when necessary
