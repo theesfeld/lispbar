@@ -1227,11 +1227,25 @@ CONFIG contains monitor-specific frame configuration."
                (not (eq position 'floating))
                (fboundp 'x-change-window-property))
       
-      ;; Check for strut conflicts if resolution is enabled
-      (let ((conflict-detected (and (eq lispbar-strut-conflict-resolution 'adjust)
-                                    (lispbar--detect-strut-conflicts geometry))))
-        (unless conflict-detected
-          (lispbar--set-frame-struts frame geometry position height))))))
+      ;; Handle strut conflicts based on resolution strategy
+      (cl-case lispbar-strut-conflict-resolution
+        (adjust
+         ;; Try to adjust position to avoid conflicts
+         (let ((conflict-detected (lispbar--detect-strut-conflicts geometry)))
+           (if conflict-detected
+               (progn
+                 (lispbar--log 'info "Strut conflict detected, adjusting position")
+                 (let ((adjusted-geometry (lispbar--resolve-strut-conflict geometry)))
+                   (when adjusted-geometry
+                     (lispbar--set-frame-struts frame adjusted-geometry position height))))
+             (lispbar--set-frame-struts frame geometry position height))))
+        (override
+         ;; Set struts regardless of conflicts
+         (lispbar--set-frame-struts frame geometry position height))
+        (disable
+         ;; Only set struts if no conflicts detected
+         (unless (lispbar--detect-strut-conflicts geometry)
+           (lispbar--set-frame-struts frame geometry position height)))))))
 
 (defun lispbar--set-frame-struts (frame geometry position height)
   "Set strut properties for FRAME based on GEOMETRY, POSITION and HEIGHT."
@@ -1263,15 +1277,78 @@ Returns t if conflicts detected, nil otherwise."
 (defun lispbar--get-existing-struts ()
   "Get existing strut reservations from window manager.
 Returns list of strut data for conflict detection."
-  ;; Simplified implementation - in a full implementation this would
-  ;; query all windows for their _NET_WM_STRUT_PARTIAL properties
-  nil)
+  (condition-case nil
+      (when (fboundp 'x-window-property)
+        ;; Query all windows for _NET_WM_STRUT_PARTIAL properties
+        (let ((struts '())
+              (all-windows (x-window-property "_NET_CLIENT_LIST" nil "WINDOW" 0 nil t)))
+          (when all-windows
+            (dolist (window all-windows)
+              (let ((strut (x-window-property "_NET_WM_STRUT_PARTIAL" window "CARDINAL" 0 nil)))
+                (when strut
+                  (push strut struts)))))
+          struts))
+    (error nil)))
 
 (defun lispbar--geometry-conflicts-with-struts-p (geometry struts)
   "Check if GEOMETRY conflicts with existing STRUTS.
 Returns t if conflicts detected."
-  ;; Placeholder for strut conflict detection logic
-  nil)
+  (when struts
+    (let* ((x (plist-get geometry :x))
+           (y (plist-get geometry :y))
+           (width (plist-get geometry :width))
+           (height (plist-get geometry :height))
+           (right (+ x width))
+           (bottom (+ y height)))
+      (cl-some (lambda (strut)
+                 ;; strut format: [left right top bottom left_start left_end 
+                 ;;                right_start right_end top_start top_end 
+                 ;;                bottom_start bottom_end]
+                 (when (and (vectorp strut) (>= (length strut) 12))
+                   (let ((s-top (aref strut 2))
+                         (s-bottom (aref strut 3))
+                         (s-top-start (aref strut 8))
+                         (s-top-end (aref strut 9))
+                         (s-bottom-start (aref strut 10))
+                         (s-bottom-end (aref strut 11)))
+                     ;; Check for conflicts with top/bottom struts
+                     (or (and (> s-top 0)
+                              (<= y s-top)
+                              (>= (+ y height) s-top)
+                              (not (or (>= x s-top-end) (<= right s-top-start))))
+                         (and (> s-bottom 0)
+                              (<= (- (display-pixel-height) s-bottom) bottom)
+                              (>= (- (display-pixel-height) s-bottom) y)
+                              (not (or (>= x s-bottom-end) (<= right s-bottom-start))))))))
+               struts))))
+
+(defun lispbar--resolve-strut-conflict (geometry)
+  "Attempt to resolve strut conflict by adjusting GEOMETRY.
+Returns adjusted geometry or nil if no resolution possible."
+  (let* ((existing-struts (lispbar--get-existing-struts))
+         (x (plist-get geometry :x))
+         (y (plist-get geometry :y))
+         (width (plist-get geometry :width))
+         (height (plist-get geometry :height))
+         (adjusted-y y))
+    
+    ;; Find the highest conflicting top strut
+    (dolist (strut existing-struts)
+      (when (and (vectorp strut) (>= (length strut) 12))
+        (let ((s-top (aref strut 2))
+              (s-top-start (aref strut 8))
+              (s-top-end (aref strut 9)))
+          ;; If this top strut conflicts with our horizontal position
+          (when (and (> s-top 0)
+                     (not (or (>= x s-top-end) (<= (+ x width) s-top-start))))
+            (setq adjusted-y (max adjusted-y (+ s-top 5)))))))  ; 5px buffer
+    
+    ;; Return adjusted geometry if we found a better position
+    (if (> adjusted-y y)
+        (progn
+          (lispbar--log 'debug "Adjusted toolbar position to avoid conflicts: y=%d" adjusted-y)
+          (plist-put (copy-sequence geometry) :y adjusted-y))
+      nil)))
 
 (defun lispbar--create-frames ()
   "Create Lispbar frames for all detected monitors with their configurations."
@@ -2437,6 +2514,88 @@ Use arrow keys to move, +/- to resize, ESC to finish."
       ;; Save final position
       (setf (plist-get frame-info :geometry) geometry)
       (message "Position adjustment complete"))))
+
+;;;###autoload
+(defun lispbar-validate-position-configuration (&optional monitor-id)
+  "Validate position configuration for MONITOR-ID (or all monitors if nil).
+Display detailed validation results and suggestions."
+  (interactive 
+   (when current-prefix-arg
+     (list (completing-read "Monitor ID: " 
+                           (mapcar (lambda (m) (plist-get m :id)) 
+                                   lispbar--monitors)))))
+  
+  (let ((issues '())
+        (warnings '())
+        (suggestions '()))
+    
+    (if monitor-id
+        ;; Validate specific monitor
+        (let* ((monitor (lispbar-get-monitor-by-id monitor-id))
+               (config (lispbar--get-monitor-config monitor-id)))
+          (when monitor
+            (lispbar--validate-monitor-position-config monitor config issues warnings suggestions)))
+      
+      ;; Validate all monitors
+      (dolist (monitor lispbar--monitors)
+        (let* ((monitor-id (plist-get monitor :id))
+               (config (lispbar--get-monitor-config monitor-id)))
+          (lispbar--validate-monitor-position-config monitor config issues warnings suggestions))))
+    
+    ;; Display results
+    (let ((message-parts '()))
+      (when issues
+        (push (format "ISSUES:\n%s" (mapconcat 'identity issues "\n")) message-parts))
+      (when warnings
+        (push (format "WARNINGS:\n%s" (mapconcat 'identity warnings "\n")) message-parts))
+      (when suggestions
+        (push (format "SUGGESTIONS:\n%s" (mapconcat 'identity suggestions "\n")) message-parts))
+      
+      (if (or issues warnings suggestions)
+          (message (mapconcat 'identity (reverse message-parts) "\n\n"))
+        (message "Position configuration is valid!")))))
+
+(defun lispbar--validate-monitor-position-config (monitor config issues warnings suggestions)
+  "Validate position configuration for MONITOR with CONFIG.
+Add problems to ISSUES, WARNINGS, and SUGGESTIONS lists."
+  (let* ((monitor-id (plist-get monitor :id))
+         (position (or (plist-get config :position) lispbar-position))
+         (offset (or (plist-get config :position-offset) lispbar-position-offset))
+         (floating-x (or (plist-get config :position-floating-x) lispbar-position-floating-x))
+         (floating-y (or (plist-get config :position-floating-y) lispbar-position-floating-y))
+         (auto-hide-enabled (or (plist-get config :auto-hide-enabled) lispbar-auto-hide-enabled))
+         (monitor-width (plist-get monitor :width))
+         (monitor-height (plist-get monitor :height)))
+    
+    ;; Validate position mode
+    (unless (memq position '(top bottom top-offset bottom-offset floating))
+      (push (format "Monitor %s: Invalid position '%s'" monitor-id position) issues))
+    
+    ;; Validate offset values
+    (when (memq position '(top-offset bottom-offset))
+      (when (or (< offset 0) (> offset (/ monitor-height 2)))
+        (push (format "Monitor %s: Offset %d may cause positioning issues" monitor-id offset) warnings)))
+    
+    ;; Validate floating coordinates
+    (when (eq position 'floating)
+      (when (or (< floating-x 0) (>= floating-x monitor-width))
+        (push (format "Monitor %s: Floating X coordinate %d is outside monitor bounds" 
+                      monitor-id floating-x) issues))
+      (when (or (< floating-y 0) (>= floating-y monitor-height))
+        (push (format "Monitor %s: Floating Y coordinate %d is outside monitor bounds" 
+                      monitor-id floating-y) issues)))
+    
+    ;; Check for strut conflicts
+    (when (and (not (eq position 'floating))
+               (plist-get config :strut-enabled))
+      (let* ((geometry (lispbar--calculate-frame-geometry monitor config))
+             (conflicts (lispbar--detect-strut-conflicts geometry)))
+        (when conflicts
+          (push (format "Monitor %s: Strut conflicts detected - consider adjusting position" monitor-id) warnings))))
+    
+    ;; Auto-hide suggestions
+    (when (and auto-hide-enabled (eq position 'floating))
+      (push (format "Monitor %s: Auto-hide with floating position may behave unexpectedly" monitor-id) suggestions))))
 
 (provide 'lispbar-core)
 ;;; lispbar-core.el ends here
