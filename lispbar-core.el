@@ -266,7 +266,11 @@ Plist keys:
 - `:auto-hide-enabled' - enable auto-hide for this monitor
 - `:auto-hide-trigger' - auto-hide trigger mode
 - `:auto-hide-timeout' - auto-hide timeout
-- `:strut-enabled' - enable strut reservation"
+- `:strut-enabled' - enable strut reservation
+- `:responsive-width-enabled' - enable responsive width for this monitor
+- `:responsive-width-mode' - responsive width mode
+- `:responsive-min-width' - minimum responsive width in pixels
+- `:responsive-max-width' - maximum responsive width in pixels"
   :type 'plist
   :group 'lispbar-monitor)
 
@@ -1399,6 +1403,105 @@ Returns adjusted geometry or nil if no resolution possible."
             (setf (plist-get frame-info :geometry) new-geometry)
             (setf (plist-get frame-info :config) config)))))))
 
+;;; Responsive Width Integration
+
+(defun lispbar--update-frame-width (frame new-width)
+  "Update FRAME width to NEW-WIDTH pixels.
+This function is called by the render system when responsive width changes are needed."
+  (when (and (frame-live-p frame) (integerp new-width) (> new-width 0))
+    (let* ((frame-info (cl-find-if (lambda (info)
+                                     (eq (plist-get info :frame) frame))
+                                   lispbar--frames))
+           (monitor-id (when frame-info (plist-get frame-info :monitor)))
+           (config (when monitor-id (lispbar--get-monitor-config monitor-id))))
+      
+      ;; Check if responsive width is enabled for this monitor
+      (when (or (plist-get config :responsive-width-enabled)
+                (and (featurep 'lispbar-render)
+                     (boundp 'lispbar-render-responsive-width-enabled)
+                     lispbar-render-responsive-width-enabled))
+        
+        (lispbar--log 'debug "Updating frame width to %d pixels" new-width)
+        
+        ;; Apply width constraints from monitor config
+        (let* ((min-width (or (plist-get config :responsive-min-width) 200))
+               (max-width (plist-get config :responsive-max-width))
+               (constrained-width (max min-width new-width)))
+          
+          (when max-width
+            (setq constrained-width (min constrained-width max-width)))
+          
+          ;; Update frame width
+          (modify-frame-parameters frame `((width . ,constrained-width)))
+          
+          ;; Update stored geometry if frame info exists
+          (when frame-info
+            (let ((geometry (plist-get frame-info :geometry)))
+              (when geometry
+                (setf (plist-get geometry :width) constrained-width)
+                (setf (plist-get frame-info :geometry) geometry))))
+          
+          (lispbar--log 'debug "Frame width updated to %d pixels (constrained from %d)"
+                        constrained-width new-width))))))
+
+(defun lispbar--calculate-responsive-geometry (monitor config content-width)
+  "Calculate responsive frame geometry for MONITOR with CONFIG and CONTENT-WIDTH.
+Returns updated geometry plist with responsive width applied."
+  (let* ((base-geometry (lispbar--calculate-frame-geometry monitor config))
+         (responsive-enabled (plist-get config :responsive-width-enabled))
+         (responsive-mode (or (plist-get config :responsive-width-mode) 'content-based)))
+    
+    (if (and responsive-enabled content-width (> content-width 0))
+        (let* ((min-width (or (plist-get config :responsive-min-width) 200))
+               (max-width (plist-get config :responsive-max-width))
+               (padding 40)  ; Default padding
+               (calculated-width (+ content-width padding))
+               (constrained-width (max min-width calculated-width)))
+          
+          (when max-width
+            (setq constrained-width (min constrained-width max-width)))
+          
+          ;; Update geometry with responsive width
+          (plist-put base-geometry :width constrained-width)
+          (plist-put base-geometry :responsive-width t)
+          base-geometry)
+      
+      ;; Return base geometry if responsive width not enabled
+      base-geometry)))
+
+(defun lispbar--get-frames-for-responsive-width ()
+  "Get list of frames that support responsive width.
+Returns list of frame-info plists for frames with responsive width enabled."
+  (cl-remove-if-not 
+   (lambda (frame-info)
+     (let* ((monitor-id (plist-get frame-info :monitor))
+            (config (lispbar--get-monitor-config monitor-id)))
+       (or (plist-get config :responsive-width-enabled)
+           (and (featurep 'lispbar-render)
+                (boundp 'lispbar-render-responsive-width-enabled)
+                lispbar-render-responsive-width-enabled))))
+   lispbar--frames))
+
+(defun lispbar--setup-responsive-width-integration ()
+  "Set up integration between core and render systems for responsive width."
+  (when (featurep 'lispbar-render)
+    ;; Add callback to render system's width change hook
+    (add-hook 'lispbar-render-width-change-hook #'lispbar--on-render-width-change)
+    (lispbar--log 'debug "Responsive width integration enabled")))
+
+(defun lispbar--on-render-width-change (frame old-width new-width)
+  "Handle width change notification from render system.
+FRAME is the frame, OLD-WIDTH and NEW-WIDTH are in pixels."
+  (lispbar--log 'debug "Received width change notification: %d -> %d" old-width new-width)
+  ;; The actual width update is handled by the render system
+  ;; This hook is for core system to track changes if needed
+  )
+
+(defun lispbar--cleanup-responsive-width ()
+  "Clean up responsive width integration."
+  (when (featurep 'lispbar-render)
+    (remove-hook 'lispbar-render-width-change-hook #'lispbar--on-render-width-change)))
+
 ;;; Auto-Hide System
 
 (defun lispbar--init-auto-hide-for-frame (frame-info)
@@ -2029,6 +2132,10 @@ management, and frame creation with hotplug support."
                         (plist-get monitor :x) (plist-get monitor :y)
                         (plist-get monitor :primary)))
         
+        ;; Set up responsive width integration if render system is available
+        (when (featurep 'lispbar-render)
+          (lispbar--setup-responsive-width-integration))
+        
         ;; Save current configuration
         (when lispbar-monitor-persistence-file
           (lispbar--save-monitor-configurations))
@@ -2055,6 +2162,9 @@ This function removes all frames, cleans up monitoring, and runs cleanup functio
   
   ;; Clean up auto-hide system
   (lispbar--cleanup-auto-hide)
+  
+  ;; Clean up responsive width integration
+  (lispbar--cleanup-responsive-width)
   
   ;; Clean up frames
   (lispbar--cleanup-frames)

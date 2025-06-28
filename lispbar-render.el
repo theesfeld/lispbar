@@ -170,6 +170,79 @@ is preserved longest during overflow situations."
   :type 'boolean
   :group 'lispbar-render)
 
+;;; Dynamic Width and Responsive Design Configuration
+
+(defcustom lispbar-render-responsive-width-enabled nil
+  "Enable dynamic width calculation based on content.
+When enabled, toolbar frames automatically resize to fit content optimally."
+  :type 'boolean
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-responsive-width-mode 'content-based
+  "Mode for responsive width calculation.
+
+- `content-based': Width based on actual content size with padding
+- `adaptive': Intelligently adapt width based on content and constraints
+- `fixed': Use fixed width (disables responsive behavior)"
+  :type '(choice (const :tag "Content-based" content-based)
+                 (const :tag "Adaptive" adaptive)
+                 (const :tag "Fixed width" fixed))
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-responsive-min-frame-width 200
+  "Minimum frame width in pixels for responsive mode.
+Frames will never be resized smaller than this value."
+  :type 'integer
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-responsive-max-frame-width nil
+  "Maximum frame width in pixels for responsive mode.
+If nil, no maximum limit is enforced."
+  :type '(choice (const :tag "Unlimited" nil)
+                 (integer :tag "Pixels"))
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-responsive-width-padding 40
+  "Additional padding in pixels for responsive width calculation.
+This ensures some breathing room around content."
+  :type 'integer
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-responsive-width-threshold 20
+  "Minimum width change in pixels to trigger frame resize.
+Smaller changes are ignored to avoid excessive updates."
+  :type 'integer
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-responsive-update-delay 0.2
+  "Delay in seconds before applying responsive width changes.
+Provides throttling to avoid excessive frame updates."
+  :type 'number
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-responsive-smooth-transitions t
+  "Enable smooth width transitions for responsive resizing.
+When enabled, width changes are animated smoothly."
+  :type 'boolean
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-responsive-transition-duration 0.15
+  "Duration in seconds for smooth width transitions."
+  :type 'number
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-responsive-char-to-pixel-ratio 8
+  "Approximate character width to pixel ratio for width calculations.
+Used to convert character-based measurements to pixel widths."
+  :type 'number
+  :group 'lispbar-render)
+
+(defcustom lispbar-render-width-change-hook nil
+  "Hook run when responsive width calculation suggests frame resize.
+Functions should accept (FRAME OLD-WIDTH NEW-WIDTH) arguments."
+  :type 'hook
+  :group 'lispbar-render)
+
 ;;; Variables
 
 (defvar lispbar-render--frame-buffers nil
@@ -189,6 +262,18 @@ is preserved longest during overflow situations."
 
 (defvar lispbar-render--last-layout-info nil
   "Cache of last layout calculation for change detection.")
+
+(defvar lispbar-render--width-calculations nil
+  "Cache of width calculations for responsive design.")
+
+(defvar lispbar-render--responsive-timers nil
+  "Alist mapping frames to their responsive update timers.")
+
+(defvar lispbar-render--frame-widths nil
+  "Alist mapping frames to their current calculated widths.")
+
+(defvar lispbar-render--transition-states nil
+  "Alist mapping frames to their width transition states.")
 
 (defcustom lispbar-render-configuration-changed-hook nil
   "Hook run when rendering configuration changes.
@@ -844,6 +929,9 @@ LEFT, CENTER, and RIGHT are content for respective positions."
               (set-window-buffer window buffer)
               (set-window-point window (point-min))))
           
+          ;; Apply responsive width update if enabled
+          (lispbar-render--responsive-width-update frame left-str center-str right-str)
+          
           (lispbar-log 'debug "Rendered frame with enhanced layout - content length: %d, sections: %d, used width: %d" 
                        (length formatted-content)
                        (length (plist-get layout :sections))
@@ -1136,6 +1224,10 @@ This function removes all buffers, timers, and caches."
   (dolist (timer-entry lispbar-render--update-timers)
     (cancel-timer (cdr timer-entry)))
   
+  ;; Cancel responsive width timers
+  (dolist (timer-entry lispbar-render--responsive-timers)
+    (cancel-timer (cdr timer-entry)))
+  
   ;; Clean up all buffers
   (dolist (buffer-entry lispbar-render--frame-buffers)
     (let ((buffer (cdr buffer-entry)))
@@ -1153,11 +1245,321 @@ This function removes all buffers, timers, and caches."
   (setq lispbar-render--frame-buffers nil
         lispbar-render--frame-content nil
         lispbar-render--update-timers nil
+        lispbar-render--responsive-timers nil
+        lispbar-render--frame-widths nil
+        lispbar-render--transition-states nil
+        lispbar-render--width-calculations nil
         lispbar-render--width-cache nil
         lispbar-render--last-layout-info nil
         lispbar-render--initialized nil)
   
   (lispbar-log 'info "Enhanced Lispbar rendering system cleanup complete"))
+
+;;; Dynamic Width Calculation
+
+(defun lispbar-render-calculate-optimal-width (frame left center right)
+  "Calculate optimal frame width for FRAME based on content.
+LEFT, CENTER, and RIGHT are content lists for respective positions.
+Returns optimal width in pixels, considering constraints and padding."
+  (when lispbar-render-responsive-width-enabled
+    (let* ((left-str (lispbar-render--normalize-content-list left))
+           (center-str (lispbar-render--normalize-content-list center))
+           (right-str (lispbar-render--normalize-content-list right))
+           (content-width (lispbar-render--calculate-total-content-width
+                          left-str center-str right-str))
+           (optimal-width (lispbar-render--content-width-to-pixels content-width)))
+      
+      (lispbar-render--apply-responsive-constraints optimal-width frame))))
+
+(defun lispbar-render--calculate-total-content-width (left center right)
+  "Calculate total content width in characters for LEFT, CENTER, RIGHT content."
+  (let* ((left-width (if left (lispbar-render--get-text-width left) 0))
+         (center-width (if center (lispbar-render--get-text-width center) 0))
+         (right-width (if right (lispbar-render--get-text-width right) 0))
+         (spacing-width (length lispbar-render-module-spacing))
+         (padding-width (* 2 (length lispbar-render-padding)))
+         (separator-width (* 2 spacing-width))  ; Between sections
+         (total-content (+ left-width center-width right-width))
+         (total-spacing (if (> total-content 0) separator-width 0))
+         (total-width (+ total-content total-spacing padding-width)))
+    
+    (lispbar-log 'debug "Content widths - left: %d, center: %d, right: %d, total: %d"
+                 left-width center-width right-width total-width)
+    total-width))
+
+(defun lispbar-render--content-width-to-pixels (char-width)
+  "Convert character-based width to pixel width."
+  (round (* char-width lispbar-render-responsive-char-to-pixel-ratio)))
+
+(defun lispbar-render--apply-responsive-constraints (width frame)
+  "Apply responsive width constraints to WIDTH for FRAME."
+  (let* ((min-width lispbar-render-responsive-min-frame-width)
+         (max-width lispbar-render-responsive-max-frame-width)
+         (constrained-width (max min-width width)))
+    
+    (when max-width
+      (setq constrained-width (min constrained-width max-width)))
+    
+    ;; Add responsive padding
+    (+ constrained-width lispbar-render-responsive-width-padding)))
+
+(defun lispbar-render--detect-width-change (frame new-width)
+  "Detect if NEW-WIDTH represents a significant change for FRAME.
+Returns t if width change exceeds threshold, nil otherwise."
+  (let ((current-width (cdr (assq frame lispbar-render--frame-widths))))
+    (or (null current-width)
+        (>= (abs (- new-width current-width))
+            lispbar-render-responsive-width-threshold))))
+
+(defun lispbar-render--cache-frame-width (frame width)
+  "Cache calculated WIDTH for FRAME."
+  (setq lispbar-render--frame-widths
+        (cons (cons frame width)
+              (cl-remove frame lispbar-render--frame-widths :key #'car))))
+
+(defun lispbar-render--schedule-responsive-update (frame new-width)
+  "Schedule responsive width update for FRAME to NEW-WIDTH."
+  (let ((timer (cdr (assq frame lispbar-render--responsive-timers))))
+    
+    ;; Cancel existing timer
+    (when timer
+      (cancel-timer timer))
+    
+    ;; Schedule new update
+    (let ((new-timer (run-at-time 
+                     lispbar-render-responsive-update-delay nil
+                     (lambda ()
+                       (lispbar-render--apply-responsive-width frame new-width)
+                       ;; Remove timer from list
+                       (setq lispbar-render--responsive-timers
+                             (cl-remove frame lispbar-render--responsive-timers 
+                                       :key #'car))))))
+      
+      (setq lispbar-render--responsive-timers
+            (cons (cons frame new-timer)
+                  (cl-remove frame lispbar-render--responsive-timers :key #'car))))))
+
+(defun lispbar-render--apply-responsive-width (frame new-width)
+  "Apply responsive width change to FRAME."
+  (when (frame-live-p frame)
+    (let ((old-width (frame-width frame)))
+      (lispbar-log 'debug "Applying responsive width change: %d -> %d" 
+                   old-width new-width)
+      
+      ;; Cache the new width
+      (lispbar-render--cache-frame-width frame new-width)
+      
+      ;; Apply width change
+      (if lispbar-render-responsive-smooth-transitions
+          (lispbar-render--smooth-width-transition frame old-width new-width)
+        (lispbar-render--instant-width-change frame new-width))
+      
+      ;; Run width change hooks
+      (run-hook-with-args 'lispbar-render-width-change-hook 
+                          frame old-width new-width))))
+
+(defun lispbar-render--smooth-width-transition (frame old-width new-width)
+  "Smoothly transition FRAME width from OLD-WIDTH to NEW-WIDTH."
+  (let* ((duration lispbar-render-responsive-transition-duration)
+         (steps 10)
+         (step-duration (/ duration steps))
+         (width-step (/ (- new-width old-width) steps))
+         (current-step 0))
+    
+    ;; Initialize transition state
+    (setq lispbar-render--transition-states
+          (cons (cons frame (list :active t :target new-width))
+                (cl-remove frame lispbar-render--transition-states :key #'car)))
+    
+    ;; Create step timer
+    (let ((step-timer 
+           (run-with-timer 0 step-duration
+                          (lambda ()
+                            (setq current-step (1+ current-step))
+                            (if (>= current-step steps)
+                                (progn
+                                  ;; Final step
+                                  (lispbar-render--instant-width-change frame new-width)
+                                  (setq lispbar-render--transition-states
+                                        (cl-remove frame lispbar-render--transition-states 
+                                                  :key #'car))
+                                  (cancel-timer step-timer))
+                              ;; Intermediate step
+                              (let ((intermediate-width 
+                                     (round (+ old-width (* current-step width-step)))))
+                                (lispbar-render--instant-width-change frame intermediate-width)))))))
+      step-timer)))
+
+(defun lispbar-render--instant-width-change (frame new-width)
+  "Instantly change FRAME width to NEW-WIDTH."
+  (modify-frame-parameters frame `((width . ,new-width))))
+
+(defun lispbar-render--responsive-width-update (frame left center right)
+  "Update responsive width for FRAME based on content if enabled."
+  (when (and lispbar-render-responsive-width-enabled
+             (not (eq lispbar-render-responsive-width-mode 'fixed)))
+    
+    (let ((optimal-width (lispbar-render-calculate-optimal-width 
+                         frame left center right)))
+      
+      (when (and optimal-width
+                 (lispbar-render--detect-width-change frame optimal-width))
+        
+        (lispbar-log 'debug "Responsive width change detected for frame: %d pixels" 
+                     optimal-width)
+        
+        ;; Schedule the width update
+        (lispbar-render--schedule-responsive-update frame optimal-width)))))
+
+;;; Enhanced Public API
+
+(defun lispbar-render-get-optimal-width (frame left center right)
+  "Get optimal width for FRAME with given content.
+Public interface for modules to check optimal width."
+  (when lispbar-render-responsive-width-enabled
+    (lispbar-render-calculate-optimal-width frame left center right)))
+
+(defun lispbar-render-force-width-update (frame)
+  "Force responsive width update for FRAME."
+  (interactive)
+  (when (frame-live-p frame)
+    (let ((timer (cdr (assq frame lispbar-render--responsive-timers))))
+      (when timer
+        (cancel-timer timer)
+        (setq lispbar-render--responsive-timers
+              (cl-remove frame lispbar-render--responsive-timers :key #'car)))
+      
+      ;; Clear cached width to force recalculation
+      (setq lispbar-render--frame-widths
+            (cl-remove frame lispbar-render--frame-widths :key #'car))
+      
+      ;; Trigger update
+      (lispbar-render-refresh frame))))
+
+(defun lispbar-render-disable-responsive-width ()
+  "Disable responsive width globally and clean up resources."
+  (interactive)
+  (setq lispbar-render-responsive-width-enabled nil)
+  
+  ;; Cancel all timers
+  (dolist (timer-entry lispbar-render--responsive-timers)
+    (cancel-timer (cdr timer-entry)))
+  
+  ;; Clear state
+  (setq lispbar-render--responsive-timers nil
+        lispbar-render--frame-widths nil
+        lispbar-render--transition-states nil
+        lispbar-render--width-calculations nil)
+  
+  (lispbar-log 'info "Responsive width system disabled"))
+
+(defun lispbar-render-enable-responsive-width ()
+  "Enable responsive width globally."
+  (interactive)
+  (setq lispbar-render-responsive-width-enabled t)
+  (lispbar-log 'info "Responsive width system enabled"))
+
+;;; Responsive Width Configuration Helpers
+
+;;;###autoload
+(defun lispbar-render-configure-responsive-width (&optional min-width max-width mode)
+  \"Configure responsive width settings interactively.
+MIN-WIDTH and MAX-WIDTH are in pixels, MODE is the responsive mode.\"
+  (interactive)
+  (let ((min (or min-width 
+                 (read-number \"Minimum frame width (pixels): \" 
+                             lispbar-render-responsive-min-frame-width)))
+        (max (when (or max-width 
+                       (y-or-n-p \"Set maximum width limit? \"))
+               (or max-width
+                   (read-number \"Maximum frame width (pixels): \"))))
+        (responsive-mode (or mode
+                            (intern (completing-read \"Responsive mode: \"
+                                                   '(\"content-based\" \"adaptive\" \"fixed\")
+                                                   nil t \"content-based\")))))
+    
+    (setq lispbar-render-responsive-min-frame-width min
+          lispbar-render-responsive-max-frame-width max
+          lispbar-render-responsive-width-mode responsive-mode)
+    
+    (when (y-or-n-p \"Enable responsive width now? \")
+      (lispbar-render-enable-responsive-width))
+    
+    (message \"Responsive width configured: min=%d, max=%s, mode=%s\"
+             min (or max \"unlimited\") responsive-mode)))
+
+;;;###autoload
+(defun lispbar-render-test-responsive-width ()
+  \"Test responsive width calculation with current content.
+Displays detailed information about width calculations.\"
+  (interactive)
+  (if (not lispbar-render-responsive-width-enabled)
+      (message \"Responsive width is disabled. Enable it first.\")
+    
+    (let ((test-results '()))
+      (dolist (frame-entry lispbar-render--frame-buffers)
+        (let* ((frame (car frame-entry))
+               (buffer (cdr frame-entry))
+               (current-width (frame-width frame))
+               (optimal-width (with-current-buffer buffer
+                               ;; Mock content for testing
+                               (lispbar-render-calculate-optimal-width 
+                                frame '(\"Test Left\") '(\"Test Center\") '(\"Test Right\")))))
+          
+          (when optimal-width
+            (push (format \"Frame %s: current=%d, optimal=%d, change=%+d\"
+                         (frame-parameter frame 'name)
+                         current-width optimal-width
+                         (- optimal-width current-width))
+                  test-results))))
+      
+      (if test-results
+          (message \"Responsive width test results:\\n%s\"
+                   (mapconcat 'identity test-results \"\\n\"))
+        (message \"No frames found for responsive width testing\")))))
+
+;;;###autoload
+(defun lispbar-render-show-responsive-status ()
+  \"Show current responsive width system status.\"
+  (interactive)
+  (let ((status-parts '()))
+    
+    (push (format \"Responsive Width: %s\" 
+                  (if lispbar-render-responsive-width-enabled \"ENABLED\" \"DISABLED\"))
+          status-parts)
+    
+    (when lispbar-render-responsive-width-enabled
+      (push (format \"Mode: %s\" lispbar-render-responsive-width-mode) status-parts)
+      (push (format \"Min Width: %d pixels\" lispbar-render-responsive-min-frame-width) status-parts)
+      (push (format \"Max Width: %s\" 
+                    (if lispbar-render-responsive-max-frame-width
+                        (format \"%d pixels\" lispbar-render-responsive-max-frame-width)
+                      \"unlimited\"))
+            status-parts)
+      (push (format \"Threshold: %d pixels\" lispbar-render-responsive-width-threshold) status-parts)
+      (push (format \"Update Delay: %.2fs\" lispbar-render-responsive-update-delay) status-parts)
+      (push (format \"Smooth Transitions: %s\" 
+                    (if lispbar-render-responsive-smooth-transitions \"enabled\" \"disabled\"))
+            status-parts)
+      (push (format \"Active Timers: %d\" (length lispbar-render--responsive-timers)) status-parts)
+      (push (format \"Cached Widths: %d\" (length lispbar-render--frame-widths)) status-parts))
+    
+    (message \"%s\" (mapconcat 'identity status-parts \"\\n\"))))
+
+;;;###autoload
+(defun lispbar-render-reset-responsive-caches ()
+  \"Reset all responsive width caches and force recalculation.\"
+  (interactive)
+  (setq lispbar-render--frame-widths nil
+        lispbar-render--transition-states nil
+        lispbar-render--width-calculations nil)
+  
+  ;; Cancel any active timers
+  (dolist (timer-entry lispbar-render--responsive-timers)
+    (cancel-timer (cdr timer-entry)))
+  (setq lispbar-render--responsive-timers nil)
+  
+  (message \"Responsive width caches reset\"))
 
 ;;; Enhanced Layout System Information
 
@@ -1179,12 +1581,23 @@ This function removes all buffers, timers, and caches."
 ;;    - Dynamic adaptation to frame size changes
 ;;    - Minimum and maximum width constraints per section
 ;;
-;; 4. Performance Optimizations:
+;; 4. Dynamic Width Calculation and Responsive Frames:
+;;    - Automatic frame width adjustment based on content
+;;    - Content-based and adaptive width calculation modes
+;;    - Configurable minimum and maximum frame widths
+;;    - Smart change detection to avoid excessive updates
+;;    - Smooth width transitions with animation support
+;;    - Integration with core frame management system
+;;    - Per-monitor responsive width configuration
+;;
+;; 5. Performance Optimizations:
 ;;    - Text width caching to avoid repeated calculations
 ;;    - Layout change detection to minimize recalculation
 ;;    - Efficient string operations and memory usage
+;;    - Throttled responsive width updates
+;;    - Width change caching and detection
 ;;
-;; 5. Backward Compatibility:
+;; 6. Backward Compatibility:
 ;;    - All enhancements are opt-in via customization
 ;;    - Legacy mode available for compatibility
 ;;    - Existing API preserved with enhanced functionality
@@ -1203,6 +1616,13 @@ This function removes all buffers, timers, and caches."
 ;;   ;; Customize section priorities (higher = more important)
 ;;   (setq lispbar-render-section-priorities
 ;;         '((left . 1) (center . 3) (right . 2)))
+;;
+;;   ;; Enable responsive width with configuration
+;;   (setq lispbar-render-responsive-width-enabled t
+;;         lispbar-render-responsive-width-mode 'content-based
+;;         lispbar-render-responsive-min-frame-width 300
+;;         lispbar-render-responsive-max-frame-width 1200
+;;         lispbar-render-responsive-smooth-transitions t)
 
 (provide 'lispbar-render)
 ;;; lispbar-render.el ends here
