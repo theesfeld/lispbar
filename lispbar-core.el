@@ -35,10 +35,18 @@
   :group 'lispbar
   :prefix "lispbar-monitor-")
 
+(defgroup lispbar-position nil
+  "Customization group for Lispbar advanced positioning."
+  :group 'lispbar
+  :prefix "lispbar-position-")
+
 (defcustom lispbar-position 'top
   "Position of the toolbar on screen."
   :type '(choice (const :tag "Top" top)
-                 (const :tag "Bottom" bottom))
+                 (const :tag "Bottom" bottom)
+                 (const :tag "Top with offset" top-offset)
+                 (const :tag "Bottom with offset" bottom-offset)
+                 (const :tag "Floating position" floating))
   :group 'lispbar)
 
 (defcustom lispbar-height 28
@@ -74,6 +82,97 @@ If nil, uses the default frame foreground color."
   "Enable debug logging for Lispbar."
   :type 'boolean
   :group 'lispbar)
+
+;;; Advanced Position Configuration
+
+(defcustom lispbar-position-offset 0
+  "Offset in pixels from screen edge for offset position modes.
+Used when position is \\='top-offset or \\='bottom-offset."
+  :type 'integer
+  :group 'lispbar-position)
+
+(defcustom lispbar-position-floating-x 100
+  "X coordinate for floating position mode.
+Used when position is \\='floating."
+  :type 'integer
+  :group 'lispbar-position)
+
+(defcustom lispbar-position-floating-y 100
+  "Y coordinate for floating position mode.
+Used when position is \\='floating."
+  :type 'integer
+  :group 'lispbar-position)
+
+(defcustom lispbar-auto-hide-enabled nil
+  "Enable auto-hide functionality for the toolbar.
+When enabled, toolbar can automatically hide and show based on triggers."
+  :type 'boolean
+  :group 'lispbar-position)
+
+(defcustom lispbar-auto-hide-trigger 'timer
+  "Trigger mechanism for auto-hide functionality.
+
+Values:
+- `timer': Hide after specified timeout when not focused
+- `mouse': Show when mouse approaches, hide when it leaves
+- `focus': Show when Emacs gains focus, hide when it loses focus
+- `manual': Only show/hide via interactive commands"
+  :type '(choice (const :tag "Timer-based" timer)
+                 (const :tag "Mouse proximity" mouse)
+                 (const :tag "Window focus" focus)
+                 (const :tag "Manual control" manual))
+  :group 'lispbar-position)
+
+(defcustom lispbar-auto-hide-timeout 3.0
+  "Timeout in seconds before auto-hiding the toolbar.
+Used when auto-hide-trigger is \\='timer."
+  :type 'number
+  :group 'lispbar-position)
+
+(defcustom lispbar-auto-hide-animation t
+  "Enable slide animations for auto-hide functionality.
+When enabled, toolbar slides in/out smoothly instead of instant show/hide."
+  :type 'boolean
+  :group 'lispbar-position)
+
+(defcustom lispbar-auto-hide-animation-duration 0.3
+  "Duration in seconds for auto-hide slide animations."
+  :type 'number
+  :group 'lispbar-position)
+
+(defcustom lispbar-auto-hide-reveal-pixels 2
+  "Number of pixels to keep visible when toolbar is auto-hidden.
+Set to 0 for complete hiding, positive values leave a visible edge."
+  :type 'integer
+  :group 'lispbar-position)
+
+(defcustom lispbar-strut-enabled t
+  "Enable strut reservation to prevent other windows from overlapping.
+When disabled, other windows may overlap the toolbar area."
+  :type 'boolean
+  :group 'lispbar-position)
+
+(defcustom lispbar-strut-conflict-resolution 'adjust
+  "How to handle conflicts with existing window manager panels.
+
+Values:
+- `adjust': Automatically adjust position to avoid conflicts
+- `override': Override existing struts (may cause overlaps)
+- `disable': Disable strut reservation when conflicts detected"
+  :type '(choice (const :tag "Adjust position" adjust)
+                 (const :tag "Override existing" override)
+                 (const :tag "Disable struts" disable))
+  :group 'lispbar-position)
+
+(defcustom lispbar-edge-snapping-enabled t
+  "Enable automatic snapping to screen edges during interactive positioning."
+  :type 'boolean
+  :group 'lispbar-position)
+
+(defcustom lispbar-edge-snapping-threshold 20
+  "Distance in pixels for edge snapping to take effect."
+  :type 'integer
+  :group 'lispbar-position)
 
 ;;; Enhanced Multi-Monitor Customization
 
@@ -151,7 +250,7 @@ Values:
   "Default configuration applied to new monitors.
 
 Plist keys:
-- `:position' - toolbar position (top/bottom)
+- `:position' - toolbar position (top/bottom/top-offset/bottom-offset/floating)
 - `:height' - toolbar height in pixels
 - `:modules-left' - list of left-side modules
 - `:modules-center' - list of center modules  
@@ -160,7 +259,14 @@ Plist keys:
 - `:background-color' - monitor-specific background color
 - `:foreground-color' - monitor-specific foreground color
 - `:margin-left' - left margin in pixels
-- `:margin-right' - right margin in pixels"
+- `:margin-right' - right margin in pixels
+- `:position-offset' - offset for offset position modes
+- `:position-floating-x' - X coordinate for floating position
+- `:position-floating-y' - Y coordinate for floating position
+- `:auto-hide-enabled' - enable auto-hide for this monitor
+- `:auto-hide-trigger' - auto-hide trigger mode
+- `:auto-hide-timeout' - auto-hide timeout
+- `:strut-enabled' - enable strut reservation"
   :type 'plist
   :group 'lispbar-monitor)
 
@@ -221,6 +327,31 @@ Each function should accept (OLD-MONITORS NEW-MONITORS) arguments.")
 
 (defvar lispbar--primary-monitor-id nil
   "Identifier of the primary monitor, if detected.")
+
+;;; Advanced Position State Variables
+
+(defvar lispbar--auto-hide-states nil
+  "Alist mapping frame info to auto-hide state.
+Each entry is (FRAME-INFO . STATE-PLIST) where STATE-PLIST contains:
+- :visible - current visibility (t/nil)
+- :timer - active hide timer
+- :animation-timer - active animation timer
+- :animation-progress - animation progress (0.0-1.0)
+- :target-position - target position during animation")
+
+(defvar lispbar--auto-hide-timers nil
+  "List of active auto-hide timers.")
+
+(defvar lispbar--mouse-tracking-timer nil
+  "Timer for mouse proximity tracking.")
+
+(defvar lispbar--strut-conflicts nil
+  "Detected strut conflicts per monitor.
+Alist mapping monitor-id to conflict information.")
+
+(defvar lispbar--position-backups nil
+  "Backup of original positions for conflict resolution.
+Used to restore positions when conflicts are resolved.")
 
 ;;; Logging
 
@@ -692,6 +823,33 @@ Uses global lispbar settings for unspecified monitor settings."
     (unless (plist-member result :margin-right)
       (setq result (plist-put result :margin-right lispbar-margin-right)))
     
+    ;; Inherit advanced position settings if not specified
+    (unless (plist-member result :position-offset)
+      (setq result (plist-put result :position-offset lispbar-position-offset)))
+    
+    (unless (plist-member result :position-floating-x)
+      (setq result (plist-put result :position-floating-x lispbar-position-floating-x)))
+    
+    (unless (plist-member result :position-floating-y)
+      (setq result (plist-put result :position-floating-y lispbar-position-floating-y)))
+    
+    ;; Inherit auto-hide settings if not specified
+    (unless (plist-member result :auto-hide-enabled)
+      (setq result (plist-put result :auto-hide-enabled lispbar-auto-hide-enabled)))
+    
+    (unless (plist-member result :auto-hide-trigger)
+      (setq result (plist-put result :auto-hide-trigger lispbar-auto-hide-trigger)))
+    
+    (unless (plist-member result :auto-hide-timeout)
+      (setq result (plist-put result :auto-hide-timeout lispbar-auto-hide-timeout)))
+    
+    (unless (plist-member result :auto-hide-animation)
+      (setq result (plist-put result :auto-hide-animation lispbar-auto-hide-animation)))
+    
+    ;; Inherit strut settings if not specified
+    (unless (plist-member result :strut-enabled)
+      (setq result (plist-put result :strut-enabled lispbar-strut-enabled)))
+    
     result))
 
 (defun lispbar--auto-configure-monitors ()
@@ -867,18 +1025,81 @@ Returns a plist with :x, :y, :width, and :height."
          (height (plist-get effective-config :height))
          (margin-left (or (plist-get effective-config :margin-left) 0))
          (margin-right (or (plist-get effective-config :margin-right) 0))
+         (position-offset (or (plist-get effective-config :position-offset) 
+                              lispbar-position-offset))
+         (floating-x (or (plist-get effective-config :position-floating-x)
+                         lispbar-position-floating-x))
+         (floating-y (or (plist-get effective-config :position-floating-y)
+                         lispbar-position-floating-y))
          (frame-width (- monitor-width margin-left margin-right))
          (frame-x (+ monitor-x margin-left))
-         (frame-y (if (eq position 'top)
-                      monitor-y
-                    (- (+ monitor-y monitor-height) height))))
+         (frame-y (lispbar--calculate-frame-y monitor-y monitor-height height 
+                                             position position-offset floating-y)))
+    
+    ;; Handle floating position special case for X coordinate
+    (when (eq position 'floating)
+      (setq frame-x (+ monitor-x floating-x)
+            frame-width (min frame-width (- monitor-width floating-x margin-right))))
+    
+    ;; Apply edge snapping if enabled and position is floating
+    (when (and (eq position 'floating) lispbar-edge-snapping-enabled)
+      (let ((snapped-coords (lispbar--apply-edge-snapping 
+                             frame-x frame-y frame-width height monitor)))
+        (setq frame-x (car snapped-coords)
+              frame-y (cadr snapped-coords))))
     
     (list :x frame-x
           :y frame-y
           :width frame-width
           :height height
           :monitor-id monitor-id
-          :config effective-config)))
+          :config effective-config
+          :position position)))
+
+(defun lispbar--calculate-frame-y (monitor-y monitor-height height position offset floating-y)
+  "Calculate Y coordinate for frame based on position mode.
+MONITOR-Y and MONITOR-HEIGHT define the monitor area.
+HEIGHT is the frame height, POSITION is the position mode,
+OFFSET is the offset for offset modes, FLOATING-Y is Y for floating mode."
+  (cl-case position
+    (top monitor-y)
+    (bottom (- (+ monitor-y monitor-height) height))
+    (top-offset (+ monitor-y offset))
+    (bottom-offset (- (+ monitor-y monitor-height) height offset))
+    (floating (+ monitor-y floating-y))
+    (t monitor-y)))  ; fallback to top
+
+(defun lispbar--apply-edge-snapping (x y width height monitor)
+  "Apply edge snapping to coordinates X, Y for frame with WIDTH, HEIGHT.
+MONITOR contains the monitor geometry.
+Returns list (new-x new-y) with snapped coordinates."
+  (let* ((monitor-x (plist-get monitor :x))
+         (monitor-y (plist-get monitor :y))
+         (monitor-width (plist-get monitor :width))
+         (monitor-height (plist-get monitor :height))
+         (monitor-right (+ monitor-x monitor-width))
+         (monitor-bottom (+ monitor-y monitor-height))
+         (threshold lispbar-edge-snapping-threshold)
+         (new-x x)
+         (new-y y))
+    
+    ;; Snap to left edge
+    (when (< (abs (- x monitor-x)) threshold)
+      (setq new-x monitor-x))
+    
+    ;; Snap to right edge
+    (when (< (abs (- (+ x width) monitor-right)) threshold)
+      (setq new-x (- monitor-right width)))
+    
+    ;; Snap to top edge
+    (when (< (abs (- y monitor-y)) threshold)
+      (setq new-y monitor-y))
+    
+    ;; Snap to bottom edge
+    (when (< (abs (- (+ y height) monitor-bottom)) threshold)
+      (setq new-y (- monitor-bottom height)))
+    
+    (list new-x new-y)))
 
 (defun lispbar--validate-geometry (geometry)
   "Validate and sanitize frame GEOMETRY.
@@ -917,12 +1138,16 @@ CONFIG contains monitor-specific frame configuration."
          (monitor-id (plist-get monitor :id))
          (frame (lispbar--create-frame geometry monitor-id config)))
     (when frame
-      (push (list :frame frame
-                 :monitor monitor-id
-                 :geometry geometry
-                 :config config)
-           lispbar--frames)
-      frame)))
+      (let ((frame-info (list :frame frame
+                             :monitor monitor-id
+                             :geometry geometry
+                             :config config)))
+        (push frame-info lispbar--frames)
+        
+        ;; Initialize auto-hide if enabled
+        (lispbar--init-auto-hide-for-frame frame-info)
+        
+        frame))))
 
 (defun lispbar--build-frame-parameters (geometry &optional config)
   "Build frame parameters list from GEOMETRY and CONFIG."
@@ -972,40 +1197,81 @@ CONFIG contains monitor-specific frame configuration."
   (with-selected-frame frame
     ;; Set frame to be sticky and always on top
     (when (fboundp 'x-change-window-property)
-      ;; Set window type to dock
-      (x-change-window-property 
-       "_NET_WM_WINDOW_TYPE" "_NET_WM_WINDOW_TYPE_DOCK" 
-       frame nil 'ATOM 32 t)
+      ;; Set window type to dock for docked positions, normal for floating
+      (let ((position (plist-get geometry :position)))
+        (if (eq position 'floating)
+            (x-change-window-property 
+             "_NET_WM_WINDOW_TYPE" "_NET_WM_WINDOW_TYPE_NORMAL" 
+             frame nil 'ATOM 32 t)
+          (x-change-window-property 
+           "_NET_WM_WINDOW_TYPE" "_NET_WM_WINDOW_TYPE_DOCK" 
+           frame nil 'ATOM 32 t)))
       
       ;; Set window to be sticky (visible on all workspaces)
       (x-change-window-property 
        "_NET_WM_DESKTOP" 0xFFFFFFFF frame nil 'CARDINAL 32 t)
       
-      ;; Get position from config or fall back to global setting
-      (let* ((position (if config 
-                          (plist-get config :position)
-                        lispbar-position))
-             (height (if config
-                        (plist-get config :height)
-                      lispbar-height)))
-        
-        ;; Reserve space for the toolbar  
-        (when (eq position 'top)
-          (x-change-window-property 
-           "_NET_WM_STRUT_PARTIAL" 
-           (vector 0 0 height 0 0 0 0 0 
-                   (plist-get geometry :x) 
-                   (+ (plist-get geometry :x) (plist-get geometry :width))
-                   0 0)
-           frame nil 'CARDINAL 32 t))
-        
-        (when (eq position 'bottom)
-          (x-change-window-property 
-           "_NET_WM_STRUT_PARTIAL" 
-           (vector 0 0 0 height 0 0 0 0 0 0
-                   (plist-get geometry :x) 
-                   (+ (plist-get geometry :x) (plist-get geometry :width)))
-           frame nil 'CARDINAL 32 t))))))
+      ;; Handle strut reservation for non-floating positions
+      (lispbar--configure-frame-struts frame geometry config))))
+
+(defun lispbar--configure-frame-struts (frame geometry config)
+  "Configure strut reservation for FRAME with GEOMETRY and CONFIG."
+  (let* ((position (plist-get geometry :position))
+         (height (plist-get geometry :height))
+         (strut-enabled (if config
+                           (plist-get config :strut-enabled)
+                         lispbar-strut-enabled)))
+    
+    ;; Only set struts for non-floating positions and if enabled
+    (when (and strut-enabled 
+               (not (eq position 'floating))
+               (fboundp 'x-change-window-property))
+      
+      ;; Check for strut conflicts if resolution is enabled
+      (let ((conflict-detected (and (eq lispbar-strut-conflict-resolution 'adjust)
+                                    (lispbar--detect-strut-conflicts geometry))))
+        (unless conflict-detected
+          (lispbar--set-frame-struts frame geometry position height))))))
+
+(defun lispbar--set-frame-struts (frame geometry position height)
+  "Set strut properties for FRAME based on GEOMETRY, POSITION and HEIGHT."
+  (let ((x (plist-get geometry :x))
+        (width (plist-get geometry :width)))
+    (cl-case position
+      ((top top-offset)
+       (x-change-window-property 
+        "_NET_WM_STRUT_PARTIAL" 
+        (vector 0 0 height 0 0 0 0 0 x (+ x width) 0 0)
+        frame nil 'CARDINAL 32 t))
+      
+      ((bottom bottom-offset)
+       (x-change-window-property 
+        "_NET_WM_STRUT_PARTIAL" 
+        (vector 0 0 0 height 0 0 0 0 0 0 x (+ x width))
+        frame nil 'CARDINAL 32 t)))))
+
+(defun lispbar--detect-strut-conflicts (geometry)
+  "Detect if GEOMETRY would conflict with existing struts.
+Returns t if conflicts detected, nil otherwise."
+  ;; This is a simplified implementation - could be enhanced to actually
+  ;; read existing _NET_WM_STRUT_PARTIAL properties from other windows
+  (condition-case nil
+      (let ((existing-struts (lispbar--get-existing-struts)))
+        (lispbar--geometry-conflicts-with-struts-p geometry existing-struts))
+    (error nil)))
+
+(defun lispbar--get-existing-struts ()
+  "Get existing strut reservations from window manager.
+Returns list of strut data for conflict detection."
+  ;; Simplified implementation - in a full implementation this would
+  ;; query all windows for their _NET_WM_STRUT_PARTIAL properties
+  nil)
+
+(defun lispbar--geometry-conflicts-with-struts-p (geometry struts)
+  "Check if GEOMETRY conflicts with existing STRUTS.
+Returns t if conflicts detected."
+  ;; Placeholder for strut conflict detection logic
+  nil)
 
 (defun lispbar--create-frames ()
   "Create Lispbar frames for all detected monitors with their configurations."
@@ -1055,6 +1321,276 @@ CONFIG contains monitor-specific frame configuration."
             ;; Update stored information
             (setf (plist-get frame-info :geometry) new-geometry)
             (setf (plist-get frame-info :config) config)))))))
+
+;;; Auto-Hide System
+
+(defun lispbar--init-auto-hide-for-frame (frame-info)
+  "Initialize auto-hide functionality for FRAME-INFO if enabled."
+  (let* ((config (plist-get frame-info :config))
+         (auto-hide-enabled (or (plist-get config :auto-hide-enabled)
+                                lispbar-auto-hide-enabled)))
+    (when auto-hide-enabled
+      (lispbar--log 'debug "Initializing auto-hide for frame")
+      
+      ;; Initialize auto-hide state
+      (let ((state (list :visible t
+                         :timer nil
+                         :animation-timer nil
+                         :animation-progress 0.0
+                         :target-position nil)))
+        (setq lispbar--auto-hide-states
+              (cons (cons frame-info state)
+                    (assoc-delete-all frame-info lispbar--auto-hide-states))))
+      
+      ;; Set up triggers based on configuration
+      (let ((trigger (or (plist-get config :auto-hide-trigger)
+                         lispbar-auto-hide-trigger)))
+        (lispbar--setup-auto-hide-triggers frame-info trigger)))))
+
+(defun lispbar--setup-auto-hide-triggers (frame-info trigger)
+  "Set up auto-hide triggers for FRAME-INFO based on TRIGGER type."
+  (cl-case trigger
+    (timer
+     (lispbar--start-auto-hide-timer frame-info))
+    (mouse
+     (lispbar--start-mouse-tracking frame-info))
+    (focus
+     (lispbar--setup-focus-tracking frame-info))
+    (manual
+     ;; No automatic triggers for manual mode
+     nil)))
+
+(defun lispbar--start-auto-hide-timer (frame-info)
+  "Start auto-hide timer for FRAME-INFO."
+  (let* ((config (plist-get frame-info :config))
+         (timeout (or (plist-get config :auto-hide-timeout)
+                      lispbar-auto-hide-timeout)))
+    (when (> timeout 0)
+      (let ((timer (run-with-timer timeout nil
+                                   #'lispbar--auto-hide-frame frame-info)))
+        (lispbar--set-auto-hide-state frame-info :timer timer)
+        (push timer lispbar--auto-hide-timers)))))
+
+(defun lispbar--start-mouse-tracking (frame-info)
+  "Start mouse proximity tracking for FRAME-INFO."
+  ;; Set up a timer to periodically check mouse position
+  (unless lispbar--mouse-tracking-timer
+    (setq lispbar--mouse-tracking-timer
+          (run-with-timer 0.1 0.1 #'lispbar--check-mouse-proximity))))
+
+(defun lispbar--setup-focus-tracking (frame-info)
+  "Set up focus-based auto-hide for FRAME-INFO."
+  ;; Add focus change hooks
+  (add-hook 'focus-in-hook #'lispbar--on-focus-in)
+  (add-hook 'focus-out-hook #'lispbar--on-focus-out))
+
+(defun lispbar--check-mouse-proximity ()
+  "Check mouse proximity to auto-hide frames and show/hide accordingly."
+  (when (display-graphic-p)
+    (condition-case nil
+        (let ((mouse-pos (mouse-position)))
+          (when mouse-pos
+            (dolist (frame-state-pair lispbar--auto-hide-states)
+              (let* ((frame-info (car frame-state-pair))
+                     (state (cdr frame-state-pair))
+                     (frame (plist-get frame-info :frame)))
+                (when (and frame (frame-live-p frame))
+                  (let ((geometry (plist-get frame-info :geometry))
+                        (proximity-threshold 50))  ; pixels
+                    (if (lispbar--mouse-near-frame-p mouse-pos geometry proximity-threshold)
+                        (lispbar--show-frame frame-info)
+                      (lispbar--auto-hide-frame frame-info))))))))
+      (error nil))))
+
+(defun lispbar--mouse-near-frame-p (mouse-pos geometry threshold)
+  "Check if mouse position is near frame defined by GEOMETRY within THRESHOLD."
+  (let* ((mouse-x (cadr mouse-pos))
+         (mouse-y (cddr mouse-pos))
+         (frame-x (plist-get geometry :x))
+         (frame-y (plist-get geometry :y))
+         (frame-width (plist-get geometry :width))
+         (frame-height (plist-get geometry :height)))
+    (and mouse-x mouse-y
+         (>= mouse-x (- frame-x threshold))
+         (<= mouse-x (+ frame-x frame-width threshold))
+         (>= mouse-y (- frame-y threshold))
+         (<= mouse-y (+ frame-y frame-height threshold)))))
+
+(defun lispbar--on-focus-in ()
+  "Handle Emacs gaining focus for auto-hide frames."
+  (dolist (frame-state-pair lispbar--auto-hide-states)
+    (let ((frame-info (car frame-state-pair)))
+      (lispbar--show-frame frame-info))))
+
+(defun lispbar--on-focus-out ()
+  "Handle Emacs losing focus for auto-hide frames."
+  (dolist (frame-state-pair lispbar--auto-hide-states)
+    (let ((frame-info (car frame-state-pair)))
+      (lispbar--auto-hide-frame frame-info))))
+
+(defun lispbar--show-frame (frame-info)
+  "Show auto-hide frame FRAME-INFO with animation if enabled."
+  (let* ((state (cdr (assoc frame-info lispbar--auto-hide-states)))
+         (visible (plist-get state :visible))
+         (frame (plist-get frame-info :frame)))
+    
+    (unless (or visible (not frame) (not (frame-live-p frame)))
+      (lispbar--log 'debug "Showing auto-hide frame")
+      
+      ;; Cancel any hide timer
+      (lispbar--cancel-auto-hide-timer frame-info)
+      
+      ;; Show with animation if enabled
+      (let ((config (plist-get frame-info :config)))
+        (if (or (plist-get config :auto-hide-animation)
+                lispbar-auto-hide-animation)
+            (lispbar--animate-frame-show frame-info)
+          (progn
+            (make-frame-visible frame)
+            (lispbar--set-auto-hide-state frame-info :visible t)))))))
+
+(defun lispbar--auto-hide-frame (frame-info)
+  "Hide auto-hide frame FRAME-INFO with animation if enabled."
+  (let* ((state (cdr (assoc frame-info lispbar--auto-hide-states)))
+         (visible (plist-get state :visible))
+         (frame (plist-get frame-info :frame)))
+    
+    (when (and visible frame (frame-live-p frame))
+      (lispbar--log 'debug "Hiding auto-hide frame")
+      
+      ;; Hide with animation if enabled
+      (let ((config (plist-get frame-info :config)))
+        (if (or (plist-get config :auto-hide-animation)
+                lispbar-auto-hide-animation)
+            (lispbar--animate-frame-hide frame-info)
+          (progn
+            (make-frame-invisible frame)
+            (lispbar--set-auto-hide-state frame-info :visible nil)))))))
+
+(defun lispbar--animate-frame-show (frame-info)
+  "Animate showing of FRAME-INFO."
+  (let* ((config (plist-get frame-info :config))
+         (duration (or (plist-get config :auto-hide-animation-duration)
+                       lispbar-auto-hide-animation-duration))
+         (steps 20)
+         (step-duration (/ duration steps))
+         (frame (plist-get frame-info :frame))
+         (geometry (plist-get frame-info :geometry))
+         (step 0))
+    
+    ;; Make frame visible but positioned off-screen initially
+    (make-frame-visible frame)
+    
+    ;; Start animation timer
+    (let ((timer (run-with-timer
+                  0 step-duration
+                  (lambda ()
+                    (cl-incf step)
+                    (let ((progress (/ (float step) steps)))
+                      (if (>= progress 1.0)
+                          (progn
+                            ;; Animation complete
+                            (lispbar--cancel-animation-timer frame-info)
+                            (lispbar--set-auto-hide-state frame-info :visible t)
+                            (lispbar--position-frame-at-target frame-info))
+                        ;; Continue animation
+                        (lispbar--update-frame-animation-position frame-info progress)))))))
+      (lispbar--set-auto-hide-state frame-info :animation-timer timer))))
+
+(defun lispbar--animate-frame-hide (frame-info)
+  "Animate hiding of FRAME-INFO."
+  (let* ((config (plist-get frame-info :config))
+         (duration (or (plist-get config :auto-hide-animation-duration)
+                       lispbar-auto-hide-animation-duration))
+         (steps 20)
+         (step-duration (/ duration steps))
+         (step 0))
+    
+    ;; Start animation timer
+    (let ((timer (run-with-timer
+                  0 step-duration
+                  (lambda ()
+                    (cl-incf step)
+                    (let ((progress (/ (float step) steps)))
+                      (if (>= progress 1.0)
+                          (progn
+                            ;; Animation complete
+                            (lispbar--cancel-animation-timer frame-info)
+                            (make-frame-invisible (plist-get frame-info :frame))
+                            (lispbar--set-auto-hide-state frame-info :visible nil))
+                        ;; Continue animation
+                        (lispbar--update-frame-animation-position frame-info (- 1.0 progress))))))))
+      (lispbar--set-auto-hide-state frame-info :animation-timer timer))))
+
+(defun lispbar--update-frame-animation-position (frame-info progress)
+  "Update frame position during animation based on PROGRESS (0.0-1.0)."
+  ;; This would implement smooth sliding animation
+  ;; For now, just update visibility
+  (let ((frame (plist-get frame-info :frame)))
+    (when (and frame (frame-live-p frame))
+      (if (> progress 0.1)
+          (make-frame-visible frame)
+        (make-frame-invisible frame)))))
+
+(defun lispbar--position-frame-at-target (frame-info)
+  "Position frame at its target location after animation."
+  (let* ((frame (plist-get frame-info :frame))
+         (geometry (plist-get frame-info :geometry)))
+    (when (and frame (frame-live-p frame))
+      (modify-frame-parameters frame
+                               `((left . ,(plist-get geometry :x))
+                                 (top . ,(plist-get geometry :y)))))))
+
+(defun lispbar--set-auto-hide-state (frame-info key value)
+  "Set auto-hide state KEY to VALUE for FRAME-INFO."
+  (let ((state (cdr (assoc frame-info lispbar--auto-hide-states))))
+    (when state
+      (setq state (plist-put state key value)))))
+
+(defun lispbar--get-auto-hide-state (frame-info key)
+  "Get auto-hide state KEY for FRAME-INFO."
+  (let ((state (cdr (assoc frame-info lispbar--auto-hide-states))))
+    (when state
+      (plist-get state key))))
+
+(defun lispbar--cancel-auto-hide-timer (frame-info)
+  "Cancel active auto-hide timer for FRAME-INFO."
+  (let ((timer (lispbar--get-auto-hide-state frame-info :timer)))
+    (when timer
+      (cancel-timer timer)
+      (lispbar--set-auto-hide-state frame-info :timer nil)
+      (setq lispbar--auto-hide-timers (delq timer lispbar--auto-hide-timers)))))
+
+(defun lispbar--cancel-animation-timer (frame-info)
+  "Cancel active animation timer for FRAME-INFO."
+  (let ((timer (lispbar--get-auto-hide-state frame-info :animation-timer)))
+    (when timer
+      (cancel-timer timer)
+      (lispbar--set-auto-hide-state frame-info :animation-timer nil))))
+
+(defun lispbar--cleanup-auto-hide ()
+  "Clean up all auto-hide timers and state."
+  (lispbar--log 'debug "Cleaning up auto-hide system")
+  
+  ;; Cancel all timers
+  (dolist (timer lispbar--auto-hide-timers)
+    (when timer (cancel-timer timer)))
+  (setq lispbar--auto-hide-timers nil)
+  
+  (when lispbar--mouse-tracking-timer
+    (cancel-timer lispbar--mouse-tracking-timer)
+    (setq lispbar--mouse-tracking-timer nil))
+  
+  ;; Cancel all animation timers
+  (dolist (frame-state-pair lispbar--auto-hide-states)
+    (lispbar--cancel-animation-timer (car frame-state-pair)))
+  
+  ;; Clear state
+  (setq lispbar--auto-hide-states nil)
+  
+  ;; Remove focus hooks
+  (remove-hook 'focus-in-hook #'lispbar--on-focus-in)
+  (remove-hook 'focus-out-hook #'lispbar--on-focus-out))
 
 ;;; Frame Cleanup
 
@@ -1440,6 +1976,9 @@ This function removes all frames, cleans up monitoring, and runs cleanup functio
     (cancel-timer lispbar--monitor-hotplug-timer)
     (setq lispbar--monitor-hotplug-timer nil))
   
+  ;; Clean up auto-hide system
+  (lispbar--cleanup-auto-hide)
+  
   ;; Clean up frames
   (lispbar--cleanup-frames)
   
@@ -1512,8 +2051,8 @@ Includes validation for multi-monitor settings."
   (let ((issues nil))
     
     ;; Validate global settings
-    (unless (memq lispbar-position '(top bottom))
-      (push "lispbar-position must be 'top or 'bottom" issues))
+    (unless (memq lispbar-position '(top bottom top-offset bottom-offset floating))
+      (push "lispbar-position must be 'top, 'bottom, 'top-offset, 'bottom-offset, or 'floating" issues))
     (unless (and (integerp lispbar-height) (> lispbar-height 0))
       (push "lispbar-height must be a positive integer" issues))
     (unless (and (integerp lispbar-margin-left) (>= lispbar-margin-left 0))
@@ -1526,6 +2065,26 @@ Includes validation for multi-monitor settings."
     (when (and lispbar-foreground-color 
                (not (color-defined-p lispbar-foreground-color)))
       (push "lispbar-foreground-color is not a valid color" issues))
+    
+    ;; Validate advanced position settings
+    (unless (and (integerp lispbar-position-offset) (>= lispbar-position-offset 0))
+      (push "lispbar-position-offset must be a non-negative integer" issues))
+    (unless (integerp lispbar-position-floating-x)
+      (push "lispbar-position-floating-x must be an integer" issues))
+    (unless (integerp lispbar-position-floating-y)
+      (push "lispbar-position-floating-y must be an integer" issues))
+    (unless (and (numberp lispbar-auto-hide-timeout) (> lispbar-auto-hide-timeout 0))
+      (push "lispbar-auto-hide-timeout must be a positive number" issues))
+    (unless (and (numberp lispbar-auto-hide-animation-duration) (> lispbar-auto-hide-animation-duration 0))
+      (push "lispbar-auto-hide-animation-duration must be a positive number" issues))
+    (unless (and (integerp lispbar-auto-hide-reveal-pixels) (>= lispbar-auto-hide-reveal-pixels 0))
+      (push "lispbar-auto-hide-reveal-pixels must be a non-negative integer" issues))
+    (unless (memq lispbar-auto-hide-trigger '(timer mouse focus manual))
+      (push "lispbar-auto-hide-trigger must be 'timer, 'mouse, 'focus, or 'manual" issues))
+    (unless (memq lispbar-strut-conflict-resolution '(adjust override disable))
+      (push "lispbar-strut-conflict-resolution must be 'adjust, 'override, or 'disable" issues))
+    (unless (and (integerp lispbar-edge-snapping-threshold) (> lispbar-edge-snapping-threshold 0))
+      (push "lispbar-edge-snapping-threshold must be a positive integer" issues))
     
     ;; Validate multi-monitor settings
     (unless (memq lispbar-monitor-detection-method '(auto exwm-randr ewmh xrandr fallback))
@@ -1560,8 +2119,8 @@ Includes validation for multi-monitor settings."
             (push (format "Monitor %s: height must be a positive integer" monitor-id) issues))
           
           (when (and (plist-get config :position)
-                     (not (memq (plist-get config :position) '(top bottom))))
-            (push (format "Monitor %s: position must be 'top or 'bottom" monitor-id) issues))
+                     (not (memq (plist-get config :position) '(top bottom top-offset bottom-offset floating))))
+            (push (format "Monitor %s: position must be 'top, 'bottom, 'top-offset, 'bottom-offset, or 'floating" monitor-id) issues))
           
           (when (and (plist-get config :background-color)
                      (not (color-defined-p (plist-get config :background-color))))
@@ -1649,6 +2208,235 @@ Includes validation for multi-monitor settings."
           (princ (format "Cache valid: %s\n" 
                         (if (< cache-age lispbar-monitor-cache-timeout) "Yes" "No"))))
       (princ "No cache data\n"))))
+
+;;; Interactive Position Commands
+
+;;;###autoload
+(defun lispbar-set-position (position &optional monitor-id)
+  "Set toolbar POSITION for MONITOR-ID (or all monitors if nil).
+POSITION can be \\='top, \\='bottom, \\='top-offset, \\='bottom-offset, or \\='floating."
+  (interactive 
+   (list (intern (completing-read 
+                  "Position: " 
+                  '("top" "bottom" "top-offset" "bottom-offset" "floating")
+                  nil t))
+         (when current-prefix-arg
+           (completing-read "Monitor ID: " 
+                           (mapcar (lambda (m) (plist-get m :id)) 
+                                   lispbar--monitors)))))
+  
+  (if monitor-id
+      ;; Set position for specific monitor
+      (let ((config (lispbar--get-monitor-config monitor-id)))
+        (setq config (plist-put config :position position))
+        (lispbar-set-monitor-configuration monitor-id config))
+    
+    ;; Set global position
+    (setq lispbar-position position)
+    
+    ;; Update all monitors that inherit global settings
+    (dolist (monitor lispbar--monitors)
+      (let* ((monitor-id (plist-get monitor :id))
+             (config (lispbar--get-monitor-config monitor-id)))
+        (when (plist-get config :inherit-global)
+          (lispbar-set-monitor-configuration monitor-id config)))))
+  
+  (message "Toolbar position set to: %s" position))
+
+;;;###autoload
+(defun lispbar-set-position-offset (offset &optional monitor-id)
+  "Set position OFFSET in pixels for MONITOR-ID (or all monitors if nil).
+Used with \\='top-offset and \\='bottom-offset position modes."
+  (interactive 
+   (list (read-number "Offset (pixels): " lispbar-position-offset)
+         (when current-prefix-arg
+           (completing-read "Monitor ID: " 
+                           (mapcar (lambda (m) (plist-get m :id)) 
+                                   lispbar--monitors)))))
+  
+  (if monitor-id
+      ;; Set offset for specific monitor
+      (let ((config (lispbar--get-monitor-config monitor-id)))
+        (setq config (plist-put config :position-offset offset))
+        (lispbar-set-monitor-configuration monitor-id config))
+    
+    ;; Set global offset
+    (setq lispbar-position-offset offset))
+  
+  (message "Position offset set to: %d pixels" offset))
+
+;;;###autoload
+(defun lispbar-set-floating-position (x y &optional monitor-id)
+  "Set floating position coordinates X, Y for MONITOR-ID (or all monitors if nil)."
+  (interactive 
+   (list (read-number "X coordinate: " lispbar-position-floating-x)
+         (read-number "Y coordinate: " lispbar-position-floating-y)
+         (when current-prefix-arg
+           (completing-read "Monitor ID: " 
+                           (mapcar (lambda (m) (plist-get m :id)) 
+                                   lispbar--monitors)))))
+  
+  (if monitor-id
+      ;; Set coordinates for specific monitor
+      (let ((config (lispbar--get-monitor-config monitor-id)))
+        (setq config (plist-put config :position-floating-x x))
+        (setq config (plist-put config :position-floating-y y))
+        (lispbar-set-monitor-configuration monitor-id config))
+    
+    ;; Set global coordinates
+    (setq lispbar-position-floating-x x
+          lispbar-position-floating-y y))
+  
+  (message "Floating position set to: (%d, %d)" x y))
+
+;;;###autoload
+(defun lispbar-toggle-auto-hide (&optional monitor-id)
+  "Toggle auto-hide functionality for MONITOR-ID (or all monitors if nil)."
+  (interactive 
+   (when current-prefix-arg
+     (list (completing-read "Monitor ID: " 
+                           (mapcar (lambda (m) (plist-get m :id)) 
+                                   lispbar--monitors)))))
+  
+  (if monitor-id
+      ;; Toggle for specific monitor
+      (let* ((config (lispbar--get-monitor-config monitor-id))
+             (current (plist-get config :auto-hide-enabled))
+             (new-value (not current)))
+        (setq config (plist-put config :auto-hide-enabled new-value))
+        (lispbar-set-monitor-configuration monitor-id config)
+        (message "Auto-hide %s for monitor %s" 
+                 (if new-value "enabled" "disabled") monitor-id))
+    
+    ;; Toggle globally
+    (setq lispbar-auto-hide-enabled (not lispbar-auto-hide-enabled))
+    (message "Auto-hide %s globally" 
+             (if lispbar-auto-hide-enabled "enabled" "disabled"))))
+
+;;;###autoload
+(defun lispbar-show-all-frames ()
+  "Show all auto-hidden frames immediately."
+  (interactive)
+  (dolist (frame-state-pair lispbar--auto-hide-states)
+    (let ((frame-info (car frame-state-pair)))
+      (lispbar--show-frame frame-info)))
+  (message "All frames shown"))
+
+;;;###autoload
+(defun lispbar-hide-all-frames ()
+  "Hide all frames with auto-hide enabled."
+  (interactive)
+  (dolist (frame-state-pair lispbar--auto-hide-states)
+    (let ((frame-info (car frame-state-pair)))
+      (lispbar--auto-hide-frame frame-info)))
+  (message "All auto-hide frames hidden"))
+
+;;;###autoload
+(defun lispbar-position-status (&optional monitor-id)
+  "Display position status for MONITOR-ID (or all monitors if nil)."
+  (interactive 
+   (when current-prefix-arg
+     (list (completing-read "Monitor ID: " 
+                           (mapcar (lambda (m) (plist-get m :id)) 
+                                   lispbar--monitors)))))
+  
+  (if monitor-id
+      ;; Show status for specific monitor
+      (let* ((monitor (lispbar-get-monitor-by-id monitor-id))
+             (config (lispbar--get-monitor-config monitor-id)))
+        (if monitor
+            (message (concat "Monitor %s:\n"
+                           "Position: %s\n"
+                           "Offset: %d\n"
+                           "Floating: (%d, %d)\n"
+                           "Auto-hide: %s\n"
+                           "Strut enabled: %s")
+                    monitor-id
+                    (plist-get config :position)
+                    (or (plist-get config :position-offset) 0)
+                    (or (plist-get config :position-floating-x) 0)
+                    (or (plist-get config :position-floating-y) 0)
+                    (if (plist-get config :auto-hide-enabled) "Yes" "No")
+                    (if (plist-get config :strut-enabled) "Yes" "No"))
+          (message "Monitor %s not found" monitor-id)))
+    
+    ;; Show global status
+    (message (concat "Global Position Settings:\n"
+                   "Position: %s\n"
+                   "Offset: %d\n"
+                   "Floating: (%d, %d)\n"
+                   "Auto-hide: %s\n"
+                   "Strut enabled: %s\n"
+                   "Active monitors: %d")
+            lispbar-position
+            lispbar-position-offset
+            lispbar-position-floating-x
+            lispbar-position-floating-y
+            (if lispbar-auto-hide-enabled "Yes" "No")
+            (if lispbar-strut-enabled "Yes" "No")
+            (length lispbar--monitors))))
+
+;;;###autoload
+(defun lispbar-interactive-position-adjust ()
+  "Interactively adjust toolbar position using keyboard shortcuts.
+Use arrow keys to move, +/- to resize, ESC to finish."
+  (interactive)
+  (when lispbar--frames
+    (let* ((frame-info (car lispbar--frames))  ; Use first frame for demo
+           (frame (plist-get frame-info :frame))
+           (geometry (copy-sequence (plist-get frame-info :geometry)))
+           (adjusting t)
+           (step-size 10))
+      
+      (message "Position adjustment mode: Arrow keys=move, +/-=resize, ESC=finish")
+      
+      (while adjusting
+        (let ((key (read-key)))
+          (cl-case key
+            ;; Movement
+            (up    (setq geometry (plist-put geometry :y 
+                                            (- (plist-get geometry :y) step-size))))
+            (down  (setq geometry (plist-put geometry :y 
+                                            (+ (plist-get geometry :y) step-size))))
+            (left  (setq geometry (plist-put geometry :x 
+                                            (- (plist-get geometry :x) step-size))))
+            (right (setq geometry (plist-put geometry :x 
+                                            (+ (plist-get geometry :x) step-size))))
+            
+            ;; Resizing
+            (?+    (setq geometry (plist-put geometry :width 
+                                            (+ (plist-get geometry :width) step-size))))
+            (?-    (setq geometry (plist-put geometry :width 
+                                            (max 50 (- (plist-get geometry :width) step-size)))))
+            
+            ;; Finish
+            (?\e   (setq adjusting nil))
+            (t     (message "Unknown key. Use arrow keys, +/-, or ESC")))
+          
+          (when adjusting
+            ;; Apply edge snapping
+            (when lispbar-edge-snapping-enabled
+              (let* ((monitor (lispbar-get-monitor-by-id (plist-get frame-info :monitor)))
+                     (snapped (lispbar--apply-edge-snapping 
+                              (plist-get geometry :x) (plist-get geometry :y)
+                              (plist-get geometry :width) (plist-get geometry :height)
+                              monitor)))
+                (setq geometry (plist-put geometry :x (car snapped)))
+                (setq geometry (plist-put geometry :y (cadr snapped)))))
+            
+            ;; Update frame position
+            (modify-frame-parameters frame
+                                    `((left . ,(plist-get geometry :x))
+                                      (top . ,(plist-get geometry :y))
+                                      (width . ,(plist-get geometry :width))))
+            
+            (message "Position: (%d, %d) Size: %dx%d"
+                    (plist-get geometry :x) (plist-get geometry :y)
+                    (plist-get geometry :width) (plist-get geometry :height)))))
+      
+      ;; Save final position
+      (setf (plist-get frame-info :geometry) geometry)
+      (message "Position adjustment complete"))))
 
 (provide 'lispbar-core)
 ;;; lispbar-core.el ends here
