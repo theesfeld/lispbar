@@ -92,7 +92,7 @@ Can be a timezone string like 'America/New_York', 'Europe/London',
 
 (defcustom lispbar-clock-position 'center
   "Position of the clock on the toolbar.
-Can be 'left, 'center, or 'right."
+Can be \='left, \='center, or \='right."
   :type '(choice (const :tag "Left" left)
                  (const :tag "Center" center)
                  (const :tag "Right" right))

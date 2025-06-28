@@ -4,32 +4,33 @@
 
 ;; Author: Lispbar Development Team
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1") (eieio "1.4") (exwm "0.24"))
-;; Keywords: workspace, exwm, modules, lispbar
+;; Package-Requires: ((emacs "27.1") (eieio "1.4"))
+;; Keywords: workspaces, exwm, modules, lispbar
 ;; URL: https://github.com/yourusername/lispbar
 
 ;;; Commentary:
 
-;; This module provides EXWM workspace display for Lispbar with comprehensive
-;; workspace tracking, switching capabilities, and customizable display options.
-;; It integrates tightly with EXWM to provide real-time workspace status updates,
-;; click-to-switch functionality, window counts, and activity indicators.
-;;
-;; The workspace module demonstrates advanced integration with the EXWM window
-;; manager and showcases the communication channel capabilities of the Lispbar
-;; module system for event-driven updates.
+;; This module provides EXWM workspace display and management for Lispbar.
+;; It shows current workspaces with configurable highlighting, supports both
+;; numbered and named workspace display modes, and provides interactive
+;; workspace switching through mouse clicks.
 ;;
 ;; Features:
-;; - Real-time workspace display with current workspace highlighting
-;; - Support for both numbered (1|2|3) and named (work|home|games) display modes
-;; - Mouse click support for instant workspace switching
-;; - Optional window count display per workspace (e.g., "1(3) 2(1) 3")
+;; - Real-time workspace status with event-driven updates
+;; - Current workspace highlighting with customizable bracket styles
+;; - Support for numbered (1 2 3) and named (work home games) display modes
+;; - Combined display mode (1:work 2:home 3:games)
+;; - Optional window count display per workspace
 ;; - Activity indicators for workspaces with windows
-;; - EXWM event-driven updates via communication channels
+;; - Click-to-switch workspace navigation
+;; - Intelligent caching to reduce CPU usage
 ;; - Graceful fallback when EXWM is not available
-;; - Configurable position (left/center/right) and priority
-;; - Intelligent caching and error recovery
-;; - Full customization through Emacs custom system
+;; - Full integration with lispbar-exwm communication channels
+;;
+;; The module listens to EXWM events through communication channels:
+;; - workspace-changed: Updates current workspace display
+;; - window-managed: Updates window counts when windows are added
+;; - window-unmanaged: Updates window counts when windows are removed
 ;;
 ;; Usage:
 ;;   (require 'lispbar-workspace)
@@ -54,53 +55,54 @@
 
 (defcustom lispbar-workspace-display-mode 'numbered
   "Display mode for workspaces.
-'numbered shows workspaces as numbers (1 2 3)
-'named shows workspace names when available (work home games)
-'both shows both number and name (1:work 2:home 3:games)"
+Can be:
+  \='numbered - Show workspace numbers (1 2 3)
+  \='named - Show workspace names (work home games)
+  \='both - Show both numbers and names (1:work 2:home)"
   :type '(choice (const :tag "Numbers only" numbered)
                  (const :tag "Names only" named)
-                 (const :tag "Both number and name" both))
+                 (const :tag "Both numbers and names" both))
   :group 'lispbar-workspace)
 
-(defcustom lispbar-workspace-show-window-count t
-  "Whether to display window count for each workspace.
-When enabled, shows count like '1(3) 2(1) 3' where numbers
-in parentheses indicate the number of windows on each workspace."
+(defcustom lispbar-workspace-show-window-count nil
+  "Whether to display window count per workspace.
+When enabled, shows format like: 1(3) 2(1) 3"
   :type 'boolean
   :group 'lispbar-workspace)
 
 (defcustom lispbar-workspace-show-activity-indicator t
-  "Whether to show activity indicators for workspaces with windows.
-When enabled, workspaces with windows are visually distinguished."
+  "Whether to highlight workspaces that have windows.
+When enabled, workspaces with windows use different face."
   :type 'boolean
   :group 'lispbar-workspace)
 
-(defcustom lispbar-workspace-separator " "
-  "Separator string between workspace items."
-  :type 'string
-  :group 'lispbar-workspace)
-
 (defcustom lispbar-workspace-current-bracket-style 'square
-  "Bracket style for highlighting the current workspace.
-'square uses [1] 2 3
-'round uses (1) 2 3
-'angle uses <1> 2 3
-'none disables brackets"
-  :type '(choice (const :tag "Square brackets [1]" square)
-                 (const :tag "Round brackets (1)" round)
-                 (const :tag "Angle brackets <1>" angle)
+  "Bracket style for highlighting current workspace.
+Can be:
+  \='square - [1] 2 3
+  \='round - (1) 2 3
+  \='angle - <1> 2 3
+  \='none - 1 2 3 (uses face only)"
+  :type '(choice (const :tag "Square brackets []" square)
+                 (const :tag "Round brackets ()" round)
+                 (const :tag "Angle brackets <>" angle)
                  (const :tag "No brackets" none))
   :group 'lispbar-workspace)
 
+(defcustom lispbar-workspace-separator " "
+  "Separator between workspace indicators."
+  :type 'string
+  :group 'lispbar-workspace)
+
 (defcustom lispbar-workspace-enable-switching t
-  "Whether to enable workspace switching via mouse clicks.
-When enabled, clicking on a workspace number switches to that workspace."
+  "Whether clicking on workspace switches to it.
+When enabled, mouse clicks on workspace indicators switch workspaces."
   :type 'boolean
   :group 'lispbar-workspace)
 
 (defcustom lispbar-workspace-position 'left
   "Position of the workspace module on the toolbar.
-Can be 'left, 'center, or 'right."
+Can be \='left, \='center, or \='right."
   :type '(choice (const :tag "Left" left)
                  (const :tag "Center" center)
                  (const :tag "Right" right))
@@ -109,53 +111,34 @@ Can be 'left, 'center, or 'right."
 (defcustom lispbar-workspace-priority 90
   "Display priority for the workspace module.
 Higher values are displayed first within the same position.
-Range: 0-100, default: 90 (high priority for left side positioning)."
+Range: 0-100, default: 90 (high priority for left position)."
   :type 'integer
   :group 'lispbar-workspace)
 
-(defcustom lispbar-workspace-update-interval nil
-  "Update interval for the workspace module in seconds.
-If nil, updates are purely event-driven via EXWM communication channels.
-Can be set to a number for periodic updates as fallback."
-  :type '(choice (const :tag "Event-driven only" nil)
-                 (number :tag "Update interval in seconds"))
-  :group 'lispbar-workspace)
-
-(defcustom lispbar-workspace-cache-timeout 5.0
+(defcustom lispbar-workspace-cache-timeout 0.1
   "Cache timeout for workspace content in seconds.
-Lower values provide more responsive updates but use more CPU."
+Set to 0 to disable caching (not recommended)."
   :type 'number
   :group 'lispbar-workspace)
 
 (defcustom lispbar-workspace-face 'lispbar-render-default
-  "Face to use for normal workspace display.
-Can be any valid face name or face specification."
+  "Face to use for normal workspace indicators."
   :type 'face
   :group 'lispbar-workspace)
 
 (defcustom lispbar-workspace-current-face 'lispbar-render-highlight
-  "Face to use for current workspace highlighting.
-Can be any valid face name or face specification."
+  "Face to use for current workspace indicator."
   :type 'face
   :group 'lispbar-workspace)
 
 (defcustom lispbar-workspace-active-face 'lispbar-render-active
-  "Face to use for workspaces with windows (activity indicator).
-Can be any valid face name or face specification."
+  "Face to use for workspaces with windows (activity)."
   :type 'face
   :group 'lispbar-workspace)
 
-(defcustom lispbar-workspace-empty-face 'lispbar-render-dim
-  "Face to use for empty workspaces.
-Can be any valid face name or face specification."
+(defcustom lispbar-workspace-empty-face 'lispbar-render-inactive
+  "Face to use for empty workspaces."
   :type 'face
-  :group 'lispbar-workspace)
-
-(defcustom lispbar-workspace-fallback-count 4
-  "Number of workspaces to show when EXWM is not available.
-This provides a reasonable fallback display when workspace
-detection fails."
-  :type 'integer
   :group 'lispbar-workspace)
 
 ;;; Variables
@@ -166,11 +149,12 @@ detection fails."
 (defvar lispbar-workspace--enabled nil
   "Whether the workspace module is currently enabled.")
 
-(defvar lispbar-workspace--last-workspace-info nil
-  "Cached workspace information for change detection.")
-
 (defvar lispbar-workspace--window-counts nil
-  "Cached window counts per workspace.")
+  "Cache of window counts per workspace.
+Alist mapping workspace index to window count.")
+
+(defvar lispbar-workspace--last-workspace-data nil
+  "Cache of last workspace data for comparison.")
 
 ;;; Workspace Module Class
 
@@ -178,31 +162,31 @@ detection fails."
   ((display-mode :initarg :display-mode
                  :type symbol
                  :initform 'numbered
-                 :documentation "Display mode: 'numbered, 'named, or 'both.")
+                 :documentation "Display mode: numbered, named, or both.")
    (show-window-count :initarg :show-window-count
                       :type boolean
-                      :initform t
+                      :initform nil
                       :documentation "Whether to show window counts.")
    (show-activity :initarg :show-activity
                   :type boolean
                   :initform t
                   :documentation "Whether to show activity indicators.")
-   (separator :initarg :separator
-              :type string
-              :initform " "
-              :documentation "Separator between workspace items.")
    (bracket-style :initarg :bracket-style
                   :type symbol
                   :initform 'square
                   :documentation "Bracket style for current workspace.")
+   (separator :initarg :separator
+              :type string
+              :initform " "
+              :documentation "Separator between workspace indicators.")
    (enable-switching :initarg :enable-switching
                      :type boolean
                      :initform t
-                     :documentation "Whether to enable click-to-switch.")
-   (normal-face :initarg :normal-face
-                :type (or symbol list)
-                :initform 'lispbar-render-default
-                :documentation "Face for normal workspaces.")
+                     :documentation "Whether mouse clicks switch workspaces.")
+   (face :initarg :face
+         :type (or symbol list)
+         :initform 'lispbar-render-default
+         :documentation "Face for normal workspace display.")
    (current-face :initarg :current-face
                  :type (or symbol list)
                  :initform 'lispbar-render-highlight
@@ -210,197 +194,134 @@ detection fails."
    (active-face :initarg :active-face
                 :type (or symbol list)
                 :initform 'lispbar-render-active
-                :documentation "Face for active workspaces.")
+                :documentation "Face for workspaces with windows.")
    (empty-face :initarg :empty-face
                :type (or symbol list)
-               :initform 'lispbar-render-dim
-               :documentation "Face for empty workspaces.")
-   (fallback-count :initarg :fallback-count
-                   :type integer
-                   :initform 4
-                   :documentation "Fallback workspace count."))
+               :initform 'lispbar-render-inactive
+               :documentation "Face for empty workspaces."))
   "Workspace module class for Lispbar.
-Displays EXWM workspaces with current highlighting and optional features.")
+Displays EXWM workspace status with interactive switching capabilities.")
 
 ;;; Helper Functions
 
-(defun lispbar-workspace--get-bracket-chars (style)
+(defun lispbar-workspace--get-brackets (style)
   "Get bracket characters for STYLE.
-Returns a cons cell (OPEN . CLOSE) with bracket characters."
+Returns a cons cell (open . close) or nil for 'none style."
   (cl-case style
     (square '("[" . "]"))
     (round '("(" . ")"))
     (angle '("<" . ">"))
-    (none '("" . ""))
+    (none nil)
     (t '("[" . "]"))))
 
-(defun lispbar-workspace--get-workspace-info ()
-  "Get current workspace information.
-Returns a plist with :current, :names, :count, and :window-counts."
-  (condition-case err
-      (let* ((current (or (lispbar-exwm-current-workspace) 0))
-             (names (or (lispbar-exwm-workspace-names) 
-                       (lispbar-workspace--generate-fallback-names)))
-             (count (length names))
-             (window-counts (lispbar-workspace--get-window-counts count)))
-        
-        (list :current current
-              :names names
-              :count count
-              :window-counts window-counts))
-    (error
-     (lispbar-modules--log 'error "Failed to get workspace info: %s" err)
-     ;; Fallback workspace info
-     (let ((fallback-count lispbar-workspace-fallback-count))
-       (list :current 0
-             :names (lispbar-workspace--generate-fallback-names fallback-count)
-             :count fallback-count
-             :window-counts (make-vector fallback-count 0))))))
+(defun lispbar-workspace--count-windows-in-workspace (workspace-index)
+  "Count windows in WORKSPACE-INDEX.
+Returns the number of windows in the workspace."
+  (if (lispbar-exwm-available-p)
+      (condition-case nil
+          (let ((count 0))
+            (dolist (buffer (buffer-list))
+              (with-current-buffer buffer
+                (when (and (eq major-mode 'exwm-mode)
+                           (boundp 'exwm--frame)
+                           exwm--frame
+                           (frame-live-p exwm--frame))
+                  (let ((frame-workspace (frame-parameter exwm--frame 'exwm-workspace)))
+                    (when (eq frame-workspace workspace-index)
+                      (cl-incf count))))))
+            count)
+        (error 0))
+    0))
 
-(defun lispbar-workspace--generate-fallback-names (&optional count)
-  "Generate fallback workspace names.
-COUNT defaults to `lispbar-workspace-fallback-count'."
-  (let ((num-workspaces (or count lispbar-workspace-fallback-count)))
-    (cl-loop for i from 1 to num-workspaces
-             collect (format "%d" i))))
+(defun lispbar-workspace--update-window-counts ()
+  "Update cached window counts for all workspaces."
+  (let ((workspace-count (length (lispbar-exwm-workspace-names))))
+    (setq lispbar-workspace--window-counts
+          (cl-loop for i from 0 below workspace-count
+                   collect (cons i (lispbar-workspace--count-windows-in-workspace i))))))
 
-(defun lispbar-workspace--get-window-counts (workspace-count)
-  "Get window counts for each workspace.
-WORKSPACE-COUNT specifies the number of workspaces.
-Returns a vector of window counts."
-  (condition-case err
-      (if (and (featurep 'exwm) (lispbar-exwm-available-p))
-          (lispbar-workspace--get-exwm-window-counts workspace-count)
-        (make-vector workspace-count 0))
-    (error
-     (lispbar-modules--log 'error "Failed to get window counts: %s" err)
-     (make-vector workspace-count 0))))
+(defun lispbar-workspace--get-window-count (workspace-index)
+  "Get cached window count for WORKSPACE-INDEX."
+  (or (cdr (assq workspace-index lispbar-workspace--window-counts)) 0))
 
-(defun lispbar-workspace--get-exwm-window-counts (workspace-count)
-  "Get window counts from EXWM for WORKSPACE-COUNT workspaces.
-Returns a vector of window counts."
-  (let ((counts (make-vector workspace-count 0)))
-    (when (and (boundp 'exwm--id-buffer-alist) exwm--id-buffer-alist)
-      (dolist (entry exwm--id-buffer-alist)
-        (let ((buffer (cdr entry)))
-          (when (buffer-live-p buffer)
-            (let ((workspace-id (buffer-local-value 'exwm--frame buffer)))
-              (when (and workspace-id (boundp 'exwm-workspace--list))
-                (let ((workspace-index (cl-position workspace-id exwm-workspace--list)))
-                  (when (and workspace-index 
-                             (>= workspace-index 0) 
-                             (< workspace-index workspace-count))
-                    (cl-incf (aref counts workspace-index))))))))))
-    counts))
+(defun lispbar-workspace--format-workspace-name (index name module)
+  "Format workspace name based on INDEX, NAME and MODULE settings.
+Returns formatted string for display."
+  (let ((display-mode (oref module display-mode)))
+    (cl-case display-mode
+      (numbered (format "%d" (1+ index)))
+      (named (or name (format "%d" (1+ index))))
+      (both (format "%d:%s" (1+ index) (or name (format "ws%d" (1+ index)))))
+      (t (format "%d" (1+ index))))))
 
-(defun lispbar-workspace--format-workspace-item (index name current-p window-count module)
-  "Format a single workspace item.
-INDEX is the 0-based workspace index.
-NAME is the workspace name or number.
-CURRENT-P indicates if this is the current workspace.
-WINDOW-COUNT is the number of windows on this workspace.
+(defun lispbar-workspace--make-clickable (text workspace-index)
+  "Make TEXT clickable to switch to WORKSPACE-INDEX."
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] 
+                (lambda () 
+                  (interactive)
+                  (lispbar-workspace-switch-to workspace-index)))
+    (propertize text
+                'mouse-face 'highlight
+                'help-echo (format "Switch to workspace %d" (1+ workspace-index))
+                'keymap map)))
+
+(defun lispbar-workspace--get-workspace-face (index current-index window-count module)
+  "Get appropriate face for workspace at INDEX.
+CURRENT-INDEX is the current workspace, WINDOW-COUNT is windows in workspace.
 MODULE is the workspace module instance."
-  (let* ((display-mode (oref module display-mode))
-         (show-count (oref module show-window-count))
-         (show-activity (oref module show-activity))
-         (bracket-style (oref module bracket-style))
-         (enable-switching (oref module enable-switching))
-         (normal-face (oref module normal-face))
-         (current-face (oref module current-face))
-         (active-face (oref module active-face))
-         (empty-face (oref module empty-face))
-         
-         ;; Determine display text
-         (display-text (cl-case display-mode
-                         (numbered (format "%d" (1+ index)))
-                         (named name)
-                         (both (format "%d:%s" (1+ index) name))
-                         (t (format "%d" (1+ index)))))
-         
-         ;; Add window count if enabled
-         (full-text (if show-count
-                        (format "%s(%d)" display-text window-count)
-                      display-text))
-         
-         ;; Add brackets for current workspace
-         (bracketed-text (if current-p
-                             (let ((brackets (lispbar-workspace--get-bracket-chars bracket-style)))
-                               (concat (car brackets) full-text (cdr brackets)))
-                           full-text))
-         
-         ;; Choose appropriate face
-         (face (cond
-                (current-p current-face)
-                ((and show-activity (> window-count 0)) active-face)
-                ((= window-count 0) empty-face)
-                (t normal-face)))
-         
-         ;; Apply face and mouse support
-         (final-text (propertize bracketed-text 'face face)))
-    
-    ;; Add mouse click support if enabled
-    (when enable-switching
-      (setq final-text
-            (propertize final-text
-                        'mouse-face 'highlight
-                        'help-echo (format "Switch to workspace %s" display-text)
-                        'keymap (let ((map (make-sparse-keymap)))
-                                 (define-key map [mouse-1] 
-                                   `(lambda (event)
-                                      (interactive "e")
-                                      (lispbar-workspace--switch-to-workspace ,index)))
-                                 map))))
-    
-    final-text))
+  (cond
+   ((= index current-index) (oref module current-face))
+   ((and (oref module show-activity) (> window-count 0)) (oref module active-face))
+   ((= window-count 0) (oref module empty-face))
+   (t (oref module face))))
 
-(defun lispbar-workspace--switch-to-workspace (index)
-  "Switch to workspace at INDEX (0-based)."
-  (condition-case err
-      (cond
-       ;; Use EXWM if available
-       ((and (featurep 'exwm) 
-             (lispbar-exwm-available-p)
-             (fboundp 'exwm-workspace-switch))
-        (exwm-workspace-switch index)
-        (lispbar-modules--log 'info "Switched to workspace %d via EXWM" (1+ index)))
-       
-       ;; Try EWMH as fallback
-       ((display-graphic-p)
-        (x-change-window-property "_NET_CURRENT_DESKTOP" index nil nil nil t t)
-        (lispbar-modules--log 'info "Switched to workspace %d via EWMH" (1+ index)))
-       
-       ;; No switching method available
-       (t
-        (lispbar-modules--log 'warning "No workspace switching method available")
-        (message "Workspace switching not available")))
-    (error
-     (lispbar-modules--log 'error "Failed to switch to workspace %d: %s" (1+ index) err)
-     (message "Failed to switch workspace: %s" err))))
+(defun lispbar-workspace--format-single-workspace (index name current-index module)
+  "Format a single workspace indicator.
+INDEX is workspace index, NAME is workspace name, CURRENT-INDEX is current.
+MODULE is the workspace module instance."
+  (let* ((window-count (lispbar-workspace--get-window-count index))
+         (is-current (= index current-index))
+         (brackets (when is-current (lispbar-workspace--get-brackets (oref module bracket-style))))
+         (face (lispbar-workspace--get-workspace-face index current-index window-count module))
+         (base-text (lispbar-workspace--format-workspace-name index name module))
+         (count-text (when (oref module show-window-count)
+                       (format "(%d)" window-count)))
+         (formatted-text (concat (when brackets (car brackets))
+                                 base-text
+                                 count-text
+                                 (when brackets (cdr brackets)))))
+    
+    ;; Apply face
+    (setq formatted-text (propertize formatted-text 'face face))
+    
+    ;; Make clickable if enabled
+    (when (oref module enable-switching)
+      (setq formatted-text (lispbar-workspace--make-clickable formatted-text index)))
+    
+    formatted-text))
 
-(defun lispbar-workspace--build-display-string (module)
-  "Build the complete workspace display string for MODULE.
-Returns a propertized string ready for display."
-  (let* ((workspace-info (lispbar-workspace--get-workspace-info))
-         (current (plist-get workspace-info :current))
-         (names (plist-get workspace-info :names))
-         (count (plist-get workspace-info :count))
-         (window-counts (plist-get workspace-info :window-counts))
+(defun lispbar-workspace--get-display-content (module)
+  "Get formatted display content for workspace MODULE.
+Returns propertized string ready for display."
+  (let* ((current-workspace (or (lispbar-exwm-current-workspace) 0))
+         (workspace-names (or (lispbar-exwm-workspace-names) '("1" "2" "3" "4")))
          (separator (oref module separator))
-         (workspace-items nil))
+         (workspace-strings nil))
     
-    ;; Build individual workspace items
-    (dotimes (i count)
-      (let* ((name (nth i names))
-             (current-p (= i current))
-             (window-count (if (vectorp window-counts) (aref window-counts i) 0)))
-        (push (lispbar-workspace--format-workspace-item i name current-p window-count module)
-              workspace-items)))
+    ;; Update window counts if needed
+    (when (or (oref module show-window-count) (oref module show-activity))
+      (lispbar-workspace--update-window-counts))
     
-    ;; Join items with separator
-    (let ((result (mapconcat #'identity (nreverse workspace-items) separator)))
-      (when (string-empty-p result)
-        (setq result (propertize "No workspaces" 'face (oref module empty-face))))
-      result)))
+    ;; Format each workspace
+    (cl-loop for name in workspace-names
+             for index from 0
+             do (push (lispbar-workspace--format-single-workspace 
+                       index name current-workspace module)
+                      workspace-strings))
+    
+    ;; Join with separator
+    (mapconcat #'identity (nreverse workspace-strings) separator)))
 
 ;;; Module Implementation
 
@@ -408,7 +329,7 @@ Returns a propertized string ready for display."
   "Update method for workspace module.
 Returns formatted workspace string for display."
   (condition-case err
-      (lispbar-workspace--build-display-string module)
+      (lispbar-workspace--get-display-content module)
     (error
      (lispbar-modules--log 'error "Workspace module update failed: %s" err)
      (propertize "Workspace Error" 'face 'lispbar-render-urgent))))
@@ -418,50 +339,37 @@ Returns formatted workspace string for display."
   (oset module display-mode lispbar-workspace-display-mode)
   (oset module show-window-count lispbar-workspace-show-window-count)
   (oset module show-activity lispbar-workspace-show-activity-indicator)
-  (oset module separator lispbar-workspace-separator)
   (oset module bracket-style lispbar-workspace-current-bracket-style)
+  (oset module separator lispbar-workspace-separator)
   (oset module enable-switching lispbar-workspace-enable-switching)
-  (oset module normal-face lispbar-workspace-face)
+  (oset module face lispbar-workspace-face)
   (oset module current-face lispbar-workspace-current-face)
   (oset module active-face lispbar-workspace-active-face)
   (oset module empty-face lispbar-workspace-empty-face)
-  (oset module fallback-count lispbar-workspace-fallback-count)
   (oset module position lispbar-workspace-position)
   (oset module priority lispbar-workspace-priority)
-  (oset module update-interval lispbar-workspace-update-interval)
   (oset module cache-timeout lispbar-workspace-cache-timeout)
   
   ;; Update position list if position changed
   (lispbar-modules--add-to-position-list module))
 
-(cl-defmethod lispbar-workspace-receive-message ((module lispbar-workspace-module) channel message)
-  "Handle messages received on communication CHANNEL with MESSAGE."
+(cl-defmethod lispbar-workspace-receive-message ((module lispbar-workspace-module) channel _message)
+  "Handle messages from communication CHANNEL for MODULE.
+_MESSAGE contains event-specific data."
   (cl-case channel
     (workspace-changed
-     (lispbar-modules--log 'debug "Workspace module received workspace change notification")
+     (lispbar-modules--log 'debug "Workspace module received workspace-changed")
      ;; Invalidate cache and trigger update
-     (lispbar-modules-invalidate-cache (oref module name))
-     (lispbar-modules-update (oref module name)))
+     (lispbar-modules-invalidate-cache 'workspace)
+     (lispbar-modules-update 'workspace))
     
-    (window-managed
-     (when (oref module show-window-count)
-       (lispbar-modules--log 'debug "Workspace module received window managed notification")
-       ;; Clear window count cache and update
-       (setq lispbar-workspace--window-counts nil)
-       (lispbar-modules-invalidate-cache (oref module name))
-       (lispbar-modules-update (oref module name))))
-    
-    (window-unmanaged
-     (when (oref module show-window-count)
-       (lispbar-modules--log 'debug "Workspace module received window unmanaged notification")
-       ;; Clear window count cache and update
-       (setq lispbar-workspace--window-counts nil)
-       (lispbar-modules-invalidate-cache (oref module name))
-       (lispbar-modules-update (oref module name))))
-    
-    (t
-     ;; Ignore other messages
-     nil)))
+    ((window-managed window-unmanaged)
+     (lispbar-modules--log 'debug "Workspace module received window event: %s" channel)
+     ;; Update window counts if we're tracking them
+     (when (or (oref module show-window-count) (oref module show-activity))
+       (lispbar-workspace--update-window-counts)
+       (lispbar-modules-invalidate-cache 'workspace)
+       (lispbar-modules-update 'workspace)))))
 
 ;;; Module Creation and Management
 
@@ -472,7 +380,7 @@ Returns the configured module instance."
                                :name 'workspace
                                :update-fn (lambda () 
                                           (lispbar-module-update lispbar-workspace--module-instance))
-                               :update-interval lispbar-workspace-update-interval
+                               :update-interval nil  ; Event-driven only
                                :position lispbar-workspace-position
                                :priority lispbar-workspace-priority
                                :cache-timeout lispbar-workspace-cache-timeout
@@ -502,15 +410,19 @@ Creates and registers the workspace module if not already enabled."
       (unless lispbar-modules--initialized
         (lispbar-modules-init))
       
-      ;; Ensure EXWM integration is initialized if available
-      (when (and (featurep 'exwm) (fboundp 'lispbar-exwm-init))
-        (unless lispbar-exwm--initialized
-          (lispbar-exwm-init)))
+      ;; Ensure EXWM integration is initialized
+      (unless lispbar-exwm--initialized
+        (lispbar-exwm-init))
       
       ;; Create and register module
       (let ((module (lispbar-workspace--create-module)))
         (lispbar-modules-register module)
         (setq lispbar-workspace--enabled t)
+        
+        ;; Initial window count update
+        (when (or (oref module show-window-count) (oref module show-activity))
+          (lispbar-workspace--update-window-counts))
+        
         (lispbar-modules--log 'info "Workspace module enabled successfully")))))
 
 ;;;###autoload
@@ -530,8 +442,8 @@ Unregisters and cleans up the workspace module."
       ;; Clean up
       (setq lispbar-workspace--module-instance nil
             lispbar-workspace--enabled nil
-            lispbar-workspace--last-workspace-info nil
-            lispbar-workspace--window-counts nil)
+            lispbar-workspace--window-counts nil
+            lispbar-workspace--last-workspace-data nil)
       
       (lispbar-modules--log 'info "Workspace module disabled"))))
 
@@ -558,117 +470,90 @@ Useful after changing workspace customization options."
 ;;; Interactive Commands
 
 ;;;###autoload
-(defun lispbar-workspace-switch-to (workspace-number)
-  "Switch to workspace WORKSPACE-NUMBER (1-based).
-Prompts for workspace number if called interactively."
-  (interactive "nWorkspace number: ")
-  (let ((zero-based-index (1- workspace-number)))
-    (lispbar-workspace--switch-to-workspace zero-based-index)))
+(defun lispbar-workspace-switch-to (workspace-index)
+  "Switch to WORKSPACE-INDEX (0-indexed).
+When called interactively, prompts for workspace number (1-indexed)."
+  (interactive
+   (list (1- (read-number "Switch to workspace: " 
+                          (1+ (or (lispbar-exwm-current-workspace) 0))))))
+  (when (lispbar-exwm-available-p)
+    (condition-case err
+        (progn
+          (exwm-workspace-switch workspace-index)
+          (message "Switched to workspace %d" (1+ workspace-index)))
+      (error
+       (message "Failed to switch workspace: %s" err)))))
 
 ;;;###autoload
 (defun lispbar-workspace-next ()
-  "Switch to the next workspace."
+  "Switch to next workspace, wrapping around if necessary."
   (interactive)
-  (let* ((workspace-info (lispbar-workspace--get-workspace-info))
-         (current (plist-get workspace-info :current))
-         (count (plist-get workspace-info :count))
-         (next-workspace (if (>= current (1- count)) 0 (1+ current))))
-    (lispbar-workspace--switch-to-workspace next-workspace)))
+  (let* ((current (or (lispbar-exwm-current-workspace) 0))
+         (total (length (lispbar-exwm-workspace-names)))
+         (next (mod (1+ current) total)))
+    (lispbar-workspace-switch-to next)))
 
 ;;;###autoload
 (defun lispbar-workspace-prev ()
-  "Switch to the previous workspace."
+  "Switch to previous workspace, wrapping around if necessary."
   (interactive)
-  (let* ((workspace-info (lispbar-workspace--get-workspace-info))
-         (current (plist-get workspace-info :current))
-         (count (plist-get workspace-info :count))
-         (prev-workspace (if (<= current 0) (1- count) (1- current))))
-    (lispbar-workspace--switch-to-workspace prev-workspace)))
-
-;;;###autoload
-(defun lispbar-workspace-set-display-mode (mode)
-  "Set workspace display MODE.
-MODE can be 'numbered, 'named, or 'both."
-  (interactive (list (intern (completing-read "Display mode: " 
-                                             '("numbered" "named" "both")
-                                             nil t))))
-  (setq lispbar-workspace-display-mode mode)
-  (when lispbar-workspace--enabled
-    (lispbar-workspace-reconfigure))
-  (message "Workspace display mode set to: %s" mode))
-
-;;;###autoload
-(defun lispbar-workspace-toggle-window-count ()
-  "Toggle window count display on/off for workspaces."
-  (interactive)
-  (setq lispbar-workspace-show-window-count (not lispbar-workspace-show-window-count))
-  (when lispbar-workspace--enabled
-    (lispbar-workspace-reconfigure))
-  (message "Workspace window count display: %s" 
-           (if lispbar-workspace-show-window-count "enabled" "disabled")))
-
-;;;###autoload
-(defun lispbar-workspace-toggle-activity-indicator ()
-  "Toggle activity indicator display on/off for workspaces."
-  (interactive)
-  (setq lispbar-workspace-show-activity-indicator 
-        (not lispbar-workspace-show-activity-indicator))
-  (when lispbar-workspace--enabled
-    (lispbar-workspace-reconfigure))
-  (message "Workspace activity indicator: %s" 
-           (if lispbar-workspace-show-activity-indicator "enabled" "disabled")))
+  (let* ((current (or (lispbar-exwm-current-workspace) 0))
+         (total (length (lispbar-exwm-workspace-names)))
+         (prev (mod (1- current) total)))
+    (lispbar-workspace-switch-to prev)))
 
 ;;; Status and Information Functions
 
+;;;###autoload
 (defun lispbar-workspace-status ()
   "Display current status of the workspace module.
-Shows whether enabled, current settings, workspace info, etc."
+Shows configuration and current workspace information."
   (interactive)
   (if lispbar-workspace--enabled
       (let* ((module lispbar-workspace--module-instance)
-             (workspace-info (lispbar-workspace--get-workspace-info))
-             (current (plist-get workspace-info :current))
-             (count (plist-get workspace-info :count))
+             (current-ws (or (lispbar-exwm-current-workspace) 0))
+             (ws-names (lispbar-exwm-workspace-names))
              (display-mode (oref module display-mode))
-             (show-count (oref module show-window-count))
-             (show-activity (oref module show-activity))
              (position (oref module position))
              (priority (oref module priority))
-             (sample-output (lispbar-workspace--build-display-string module)))
+             (sample-output (lispbar-workspace--get-display-content module)))
         (message (concat "Workspace module: ENABLED\n"
                         "Position: %s (priority %d)\n"
-                        "Current workspace: %d of %d\n"
                         "Display mode: %s\n"
-                        "Window count: %s\n"
-                        "Activity indicator: %s\n"
-                        "Click switching: %s\n"
+                        "Current workspace: %d (%s)\n"
+                        "Total workspaces: %d\n"
                         "Sample output: %s")
-                position priority (1+ current) count display-mode
-                (if show-count "enabled" "disabled")
-                (if show-activity "enabled" "disabled")
-                (if (oref module enable-switching) "enabled" "disabled")
+                position priority display-mode 
+                (1+ current-ws) (nth current-ws ws-names)
+                (length ws-names)
                 sample-output))
     (message "Workspace module: DISABLED")))
 
+;;;###autoload
 (defun lispbar-workspace-info ()
-  "Display detailed workspace information.
-Shows current workspace, available workspaces, window counts, etc."
+  "Display detailed workspace information including window counts."
   (interactive)
-  (let* ((workspace-info (lispbar-workspace--get-workspace-info))
-         (current (plist-get workspace-info :current))
-         (names (plist-get workspace-info :names))
-         (count (plist-get workspace-info :count))
-         (window-counts (plist-get workspace-info :window-counts)))
-    (message (concat "Workspace Information:\n"
-                    "Current: %d (%s)\n"
-                    "Total workspaces: %d\n"
-                    "Workspace details:\n%s")
-            (1+ current) (nth current names) count
-            (mapconcat (lambda (i)
-                        (format "  %d: %s (%d windows)"
-                               (1+ i) (nth i names)
-                               (if (vectorp window-counts) (aref window-counts i) 0)))
-                      (number-sequence 0 (1- count)) "\n"))))
+  (if (lispbar-exwm-available-p)
+      (let* ((current-ws (or (lispbar-exwm-current-workspace) 0))
+             (ws-names (lispbar-exwm-workspace-names))
+             (info-lines nil))
+        
+        ;; Update window counts
+        (lispbar-workspace--update-window-counts)
+        
+        ;; Build info for each workspace
+        (cl-loop for name in ws-names
+                 for index from 0
+                 for window-count = (lispbar-workspace--get-window-count index)
+                 do (push (format "Workspace %d%s: %s (%d windows)"
+                                  (1+ index)
+                                  (if (= index current-ws) " [current]" "")
+                                  name
+                                  window-count)
+                          info-lines))
+        
+        (message (mapconcat #'identity (nreverse info-lines) "\n")))
+    (message "EXWM not available")))
 
 ;;; Module Cleanup
 
