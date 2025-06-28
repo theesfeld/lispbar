@@ -139,7 +139,7 @@ ARGS are passed to `format' for MESSAGE formatting."
    (cache :initform nil
           :documentation "Cached module output with timestamp.")
    (cache-timeout :initarg :cache-timeout
-                  :type number
+                  :type (or null number)
                   :initform nil
                   :documentation "Cache timeout in seconds, nil to use default.")
    (dependencies :initarg :dependencies
