@@ -113,14 +113,40 @@ The base URL is a defvar:
 Anything `curl` accepts as a URL is fine.  `manifest.lisp`,
 `modules/*.lisp` and `themes/*.lisp` must all live under that prefix.
 
+## Item metadata
+
+Every entry in the manifest carries:
+
+| Field          | Required | Notes                                          |
+|----------------|----------|------------------------------------------------|
+| `:kind`        | yes      | `:module` or `:theme`                          |
+| `:file`        | yes      | path under `registry/`                         |
+| `:sha256`      | yes      | content hash; verified on download             |
+| `:summary`     | yes      | one-line description shown in `registry list`  |
+| `:version`     | yes      | semver string, e.g. `"1.0.0"`                  |
+| `:license`     | yes      | SPDX identifier                                |
+| `:added`       | yes      | ISO date of first submission                   |
+| `:updated`     | yes      | ISO date of most recent change                 |
+| `:description` | no       | multi-line full description                    |
+| `:author`      | no       | GitHub handle or display name                  |
+| `:homepage`    | no       | upstream URL                                   |
+| `:tags`        | no       | `'("system" "weather")` — searchable in fzf    |
+| `:requires`    | no       | external programs the module shells out to    |
+
+`lispbar registry info NAME` renders all of these.  The validator
+enforces that **any change to the file requires `:version` and
+`:updated` to be bumped**, so you can tell at a glance which items
+have moved since you last looked.
+
 ## Submitting your own
 
 See `registry/CONTRIBUTING.md` for the full checklist.  In short:
 
 1. Drop a single `.lisp` file under `registry/modules/` or
    `registry/themes/`.
-2. Add a `(register …)` entry to `registry/manifest.lisp`, including
-   the SHA-256 of your file (`sha256sum registry/modules/foo.lisp`).
+2. Add a `(register …)` entry to `registry/manifest.lisp` filling in
+   every required field above (including the SHA-256 from
+   `sha256sum`).
 3. Update the table in `registry/README.md`.
 4. Open a PR.
 

@@ -49,17 +49,47 @@ For a theme:
 
 For both:
 
-- [ ] One new `(register …)` entry in `manifest.lisp` with:
-    * `:kind     :module` or `:theme`
-    * `:file     "modules/foo.lisp"` or `"themes/foo.lisp"`
-    * `:sha256   "..."`  - the file's SHA-256 (`sha256sum file`)
-    * `:doc      "one-line description"`
-    * `:author   "github-handle"` (optional)
-    * `:requires '(...)` — list of external programs the module
-      shells out to (informational, shown in `lispbar registry info`).
-      Note the quote — the manifest is read with `eval` and an
-      unquoted list reads as a function call.
+- [ ] One new `(register …)` entry in `manifest.lisp`.  Required and
+      optional fields below.
 - [ ] Updated entry in `registry/README.md`'s module / theme table.
+
+### Manifest fields
+
+Required on every entry:
+
+| Field         | Example                                               |
+|---------------|-------------------------------------------------------|
+| `:kind`       | `:module` or `:theme`                                 |
+| `:file`       | `"modules/foo.lisp"` or `"themes/foo.lisp"`           |
+| `:sha256`     | the file's SHA-256 (`sha256sum file`)                 |
+| `:summary`    | one-line description shown in `registry list`         |
+| `:version`    | semver string, e.g. `"1.0.0"`                         |
+| `:license`    | SPDX identifier, e.g. `"GPL-3.0-or-later"`            |
+| `:added`      | ISO date the item was first submitted (`"2026-05-19"`)|
+| `:updated`    | ISO date of the most recent change                    |
+
+Optional:
+
+| Field         | Example                                               |
+|---------------|-------------------------------------------------------|
+| `:description`| multi-line full description (paragraph or two)        |
+| `:author`     | GitHub handle or display name                         |
+| `:homepage`   | upstream URL for the colour scheme / API / etc.       |
+| `:tags`       | `'("system" "weather")` — for filtering in `list`     |
+| `:requires`   | `'("curl" "jq")` — external programs the module needs |
+
+Notes:
+
+* `:tags` and `:requires` are **quoted** lists (`'("a" "b")`).  The
+  manifest is read with `eval`, so an unquoted list reads as a
+  function call.
+* For brand-new submissions, set `:added` and `:updated` to the same
+  date.  On follow-up PRs touching the file, bump both `:version`
+  and `:updated`.  The validator enforces this: if the entry's
+  `:sha256` differs from master's, `:version` and `:updated` must
+  also differ.
+* `:description` may span several lines; the client renders it
+  verbatim under `registry info`.
 
 ## Style
 
