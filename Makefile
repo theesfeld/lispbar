@@ -65,7 +65,11 @@ shim:
 build: shim lispbar
 
 lispbar: $(wildcard src/*.lisp src/modules/*.lisp src/output/*.lisp) \
-         lispbar.asd build.lisp cshim/libwlbar.so
+         examples/config.lisp lispbar.asd build.lisp cshim/libwlbar.so
+	@# Drop the cached FASL for src/config.lisp so the `#.' that
+	@# reads examples/config.lisp at compile time runs again.
+	@find ~/.cache/common-lisp -path '*lispbar/src/config.*' \
+	  -delete 2>/dev/null || true
 	LD_LIBRARY_PATH=$(CURDIR)/cshim:$$LD_LIBRARY_PATH \
 	  $(SBCL) --non-interactive --load build.lisp
 

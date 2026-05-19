@@ -116,21 +116,40 @@ Splits on top-level brace boundaries; ignores braces inside strings."
 
 (defun workspaces-niri ()
   "Return (NAMES FOCUSED-NAME) for niri, or NIL on failure.
-niri's `niri msg workspaces' prints one workspace per line in the
-form `* 1' (focused) or `  2' (unfocused).  We parse that."
-  (let ((out (run-capture "niri" "msg" "workspaces")))
+
+niri exposes a JSON IPC: `niri msg --json workspaces' returns an
+array of workspace objects.  Each object has at least:
+
+  {\"id\": N, \"idx\": N, \"name\": STRING|null,
+   \"output\": \"DP-1\", \"is_focused\": true|false, ...}
+
+niri workspaces are per-output (every monitor has its own 1, 2, 3,
+...), so showing them all on every bar gives confusing duplicates.
+We pick whichever output currently has focus and show only that
+output's workspaces.  Names fall back to numeric idx so unnamed
+workspaces still appear as `1', `2', ..."
+  (let ((out (run-capture "niri" "msg" "--json" "workspaces")))
     (when out
-      (let ((lines (uiop:split-string out :separator '(#\Newline)))
-            names focused)
-        (dolist (line lines)
-          (when (>= (length line) 3)
-            (let ((focused-p (char= (char line 0) #\*))
-                  (rest (string-trim '(#\Space #\Tab #\*) line)))
-              (when (plusp (length rest))
-                (let ((name (first (uiop:split-string rest))))
-                  (push name names)
-                  (when focused-p (setf focused name)))))))
-        (when names (list (nreverse names) focused))))))
+      (let* ((entries (split-json-objects out))
+             (focused-output
+              (loop for e in entries
+                    when (json-bool-value e "is_focused")
+                    return (json-string-value e "output")))
+             ids focused)
+        (dolist (e entries)
+          (let* ((output (json-string-value e "output"))
+                 (name   (json-string-value e "name"))
+                 (idx    (json-number-value e "idx"))
+                 (label  (or (and name (plusp (length name)) name)
+                             (and idx (format nil "~d" idx))))
+                 (focus  (json-bool-value e "is_focused")))
+            (when (and label
+                       (or (null focused-output)
+                           (and output (string= output focused-output))))
+              (push (cons (or idx 0) label) ids)
+              (when focus (setf focused label)))))
+        (let ((names (mapcar #'cdr (sort ids #'< :key #'car))))
+          (and names (list names focused)))))))
 
 (defvar *workspaces-source-cache* :unprobed
   "Cached result of `detect-workspaces-source' to avoid spawning IPC
