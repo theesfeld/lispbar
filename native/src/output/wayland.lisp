@@ -149,79 +149,15 @@ cairo_show_text which has no font fallback or shaping."
     (pango-layout-get-pixel-size layout w h)
     (cffi:mem-ref w :int)))
 
-;;; ---------- Theme palette ----------
+;;; ---------- Rendering tunables ----------
 ;;;
-;;; A theme is a plist mapping face keywords to (R G B A) doubles.
-;;; Module update functions return either a string (rendered with
-;;; :normal) or (:text STR :face FACE).  The faces are:
-;;;
-;;;   :bg :normal :accent :ok :warn :urgent :muted
+;;; Themes (face palettes) now live in theme.lisp.  This file just
+;;; consumes `theme-color' and the font tunables.
 
-(defvar *wayland-theme* nil
-  "Plist of face -> colour for the active theme.")
 (defvar *wayland-font-family* "monospace")
 (defvar *wayland-font-size*   13.0d0)
 (defvar *wayland-font-spec*   "Monospace 11"
   "Pango font description string used by the high-quality text path.")
-
-(defun theme-color (face)
-  "Return the (R G B A) colour for FACE in the active theme."
-  (or (getf *wayland-theme* face)
-      (getf *wayland-theme* :normal)
-      '(0.88 0.88 0.88 1.0)))
-
-(defun apply-theme (theme)
-  "Install a face palette for THEME (a keyword)."
-  (setf *wayland-theme*
-        (case theme
-          (:nordish
-           '(:bg     (0.180 0.204 0.251 1.0)
-             :normal (0.847 0.871 0.914 1.0)
-             :accent (0.533 0.753 0.816 1.0)
-             :ok     (0.639 0.745 0.549 1.0)
-             :warn   (0.922 0.796 0.545 1.0)
-             :urgent (0.749 0.380 0.416 1.0)
-             :muted  (0.380 0.420 0.490 1.0)))
-          (:gruvboxish
-           '(:bg     (0.157 0.157 0.157 1.0)
-             :normal (0.922 0.859 0.698 1.0)
-             :accent (0.980 0.741 0.184 1.0)
-             :ok     (0.722 0.733 0.149 1.0)
-             :warn   (0.996 0.502 0.098 1.0)
-             :urgent (0.984 0.286 0.204 1.0)
-             :muted  (0.486 0.435 0.392 1.0)))
-          (:catppuccinish
-           '(:bg     (0.118 0.118 0.184 1.0)
-             :normal (0.804 0.839 0.957 1.0)
-             :accent (0.537 0.706 0.980 1.0)
-             :ok     (0.651 0.890 0.631 1.0)
-             :warn   (0.976 0.886 0.686 1.0)
-             :urgent (0.953 0.545 0.659 1.0)
-             :muted  (0.424 0.439 0.525 1.0)))
-          (:doomish
-           '(:bg     (0.157 0.173 0.204 1.0)
-             :normal (0.733 0.761 0.812 1.0)
-             :accent (0.318 0.686 0.937 1.0)
-             :ok     (0.596 0.745 0.396 1.0)
-             :warn   (0.925 0.745 0.482 1.0)
-             :urgent (1.000 0.424 0.420 1.0)
-             :muted  (0.357 0.384 0.408 1.0)))
-          (:minimal
-           '(:bg     (0.0 0.0 0.0 1.0)
-             :normal (1.0 1.0 1.0 1.0)
-             :accent (1.0 1.0 1.0 1.0)
-             :ok     (1.0 1.0 1.0 1.0)
-             :warn   (1.0 1.0 1.0 1.0)
-             :urgent (1.0 1.0 1.0 1.0)
-             :muted  (0.7 0.7 0.7 1.0)))
-          (t
-           '(:bg     (0.110 0.118 0.137 1.0)
-             :normal (0.880 0.880 0.880 1.0)
-             :accent (0.580 0.760 0.960 1.0)
-             :ok     (0.500 0.870 0.480 1.0)
-             :warn   (0.960 0.760 0.300 1.0)
-             :urgent (0.960 0.420 0.420 1.0)
-             :muted  (0.560 0.580 0.620 1.0))))))
 
 ;;; ---------- Frame rendering ----------
 

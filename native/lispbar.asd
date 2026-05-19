@@ -14,6 +14,8 @@
                 :components
                 ((:file "package")
                  (:file "log")
+                 (:file "xdg")
+                 (:file "theme")
                  (:file "config")
                  (:file "module")
                  (:module "modules"
