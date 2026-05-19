@@ -1,0 +1,18 @@
+#!/bin/sh
+# runit service for Lispbar.
+#
+# Drop this directory under ~/runit/service/ (or wherever your user
+# runsvdir watches) to have Lispbar started, supervised, and
+# restarted automatically:
+#
+#     mkdir -p ~/runit/service
+#     ln -s /usr/local/share/lispbar/init/runit/lispbar ~/runit/service/
+#
+# `sv status lispbar`, `sv restart lispbar`, etc.
+#
+# runit captures both stdout and stderr; logs are visible via
+# `tail -F ~/runit/service/lispbar/supervise/log` if you add a log/run
+# service.
+
+exec 2>&1
+exec lispbar

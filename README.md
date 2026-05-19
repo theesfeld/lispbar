@@ -10,7 +10,7 @@ to its config file — a real binary with a configuration file at
 
 ```sh
 make build              # produces ./lispbar (12 MB, self-contained)
-sudo make install       # /usr/local/{bin,lib,share}/lispbar/...
+sudo make install       # see "Install" below
 ```
 
 Requirements:
@@ -27,20 +27,67 @@ The binary is built once on your machine and runs anywhere that has
 those shared libraries available — there's no Lisp dependency on the
 target host because SBCL's runtime is embedded.
 
+## Install
+
+`make install` honours the standard `PREFIX` (default `/usr/local`)
+and `DESTDIR` (default empty) variables.  Init-system integration
+is auto-detected; override with `INIT=`:
+
+```sh
+sudo make install                       # auto-detect (systemd | runit | openrc)
+sudo make install INIT=systemd
+sudo make install INIT=runit
+sudo make install INIT=openrc           # no init wiring; uses compositor exec
+sudo make install PREFIX=/usr           # distribution-style prefix
+make install PREFIX=$HOME/.local        # user-local prefix
+```
+
+What gets installed:
+
+| File                                                                | Source                          |
+| ------------------------------------------------------------------- | ------------------------------- |
+| `$PREFIX/bin/lispbar`                                               | the binary                      |
+| `$PREFIX/lib/lispbar/libwlbar.so`                                   | Wayland C shim                  |
+| `$PREFIX/share/lispbar/examples/config.lisp`                        | starter config                  |
+| `$PREFIX/share/lispbar/examples/modules/loadavg.lisp`               | example user module             |
+| `$PREFIX/share/lispbar/examples/themes/dracula.lisp`                | example user theme              |
+| `$PREFIX/share/lispbar/init/systemd/lispbar.service`                | systemd user unit (reference)   |
+| `$PREFIX/share/lispbar/init/runit/lispbar/run`                      | runit service (reference)       |
+| `$PREFIX/share/lispbar/init/openrc/README.md`                       | OpenRC integration notes        |
+| `$PREFIX/share/doc/lispbar/{README.md,LICENSE}`                     | docs                            |
+| `$PREFIX/lib/systemd/user/lispbar.service`                          | only when `INIT=systemd`        |
+
+`make uninstall` removes every file `make install` placed.  User
+config under `$XDG_CONFIG_HOME/lispbar/` is **not** touched.
+
+### Init-system integration
+
+Depending on your init system, choose one of:
+
+| Init     | How Lispbar starts                                                              |
+| -------- | ------------------------------------------------------------------------------- |
+| systemd  | `systemctl --user enable --now lispbar`                                         |
+| runit    | `ln -s $PREFIX/share/lispbar/init/runit/lispbar ~/runit/service/`               |
+| OpenRC   | `exec lispbar` in `~/.config/sway/config` (or `exec-once = lispbar` for Hyprland) |
+| anything | `exec lispbar` in your compositor config always works                           |
+
+OpenRC users: see `$PREFIX/share/lispbar/init/openrc/README.md`
+for the rationale.  TL;DR — OpenRC is a system-level supervisor;
+graphical user-session bars are started by the compositor on every
+init system, OpenRC included.
+
 ## Use
 
 ```sh
-./lispbar                      # streams forever, picks driver from config
-./lispbar --once               # one frame to stdout (handy for scripts)
-./lispbar --output json        # waybar-compatible JSON per tick
-./lispbar --list-modules       # registry inventory
+./lispbar                       # streams forever, picks driver from config
+./lispbar --once                # one frame to stdout (handy for scripts)
+./lispbar --output json         # waybar-compatible JSON per tick
+./lispbar --list-modules        # registry inventory
+./lispbar --list-themes         # theme registry
+./lispbar --print-paths         # XDG path resolution
+./lispbar --show-extensions     # which user files got loaded
 ./lispbar --help
 ```
-
-Add `lispbar` to your compositor startup (Sway `exec`, Hyprland
-`exec-once`, or `systemctl --user enable --now lispbar.service`).
-The bar is anchored to the top edge of every output via
-`wlr-layer-shell` — no window-rule snippets, no struts: it Just Works.
 
 ### Configuration
 
@@ -53,9 +100,10 @@ binary on startup.  Every form is one of:
 (placement :center (:media))
 (placement :right  (:cpu :memory :audio :bluetooth :brightness :battery :clock))
 
-(theme    :nordish)             ; or any registered theme
-(font     "Sans Bold 11")       ; Pango font description
+(position :top)                 ; :top | :bottom
 (height   28)                   ; bar height in pixels
+(font     "Sans Bold 11")       ; Pango font description
+(theme    :nordish)             ; or any registered theme
 (tick     1.0)                  ; refresh interval in seconds
 (output   :wayland)             ; :wayland :stdout :json
 (log-level :info)               ; :debug :info :warn :error

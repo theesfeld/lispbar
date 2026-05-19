@@ -67,11 +67,12 @@ inside config.lisp itself."
          (:placement
           (destructuring-bind (where modules) args
             (setf (getf *config* (intern (string where) :keyword)) modules)))
-         (:theme     (setf (getf *config* :theme)  (first args)))
-         (:output    (setf (getf *config* :output) (first args)))
-         (:tick      (setf (getf *config* :tick)   (first args)))
-         (:height    (setf (getf *config* :height) (first args)))
-         (:font      (setf (getf *config* :font)   (first args)))
+         (:theme     (setf (getf *config* :theme)    (first args)))
+         (:output    (setf (getf *config* :output)   (first args)))
+         (:tick      (setf (getf *config* :tick)     (first args)))
+         (:height    (setf (getf *config* :height)   (first args)))
+         (:font      (setf (getf *config* :font)     (first args)))
+         (:position  (setf (getf *config* :position) (first args)))
          (:log-level (setf *log-level* (first args)))
          (otherwise
           ;; Not a DSL keyword - treat as ordinary Lisp (defmodule,

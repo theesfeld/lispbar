@@ -59,8 +59,9 @@ static struct wl_shm        *g_shm        = NULL;
 static struct zwlr_layer_shell_v1 *g_layer_shell = NULL;
 
 static struct bar_output  g_outputs[MAX_OUTPUTS];
-static int                g_output_count   = 0;
+static int                g_output_count     = 0;
 static int                g_requested_height = 28;
+static int                g_requested_position = WLBAR_POSITION_TOP;
 
 /* ---- Forward decls ---- */
 
@@ -243,9 +244,11 @@ static int bar_output_open(struct bar_output *bo) {
         ZWLR_LAYER_SHELL_V1_LAYER_TOP, BAR_NAMESPACE);
 
     uint32_t anchor =
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
         ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
+        (g_requested_position == WLBAR_POSITION_BOTTOM
+         ? ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
+         : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
     zwlr_layer_surface_v1_set_anchor(bo->layer_surface, anchor);
     zwlr_layer_surface_v1_set_size(bo->layer_surface, 0, g_requested_height);
     zwlr_layer_surface_v1_set_exclusive_zone(bo->layer_surface,
@@ -273,10 +276,13 @@ static void bar_output_close(struct bar_output *bo) {
 
 /* ---- Public API ---- */
 
-int wlbar_init(int height) {
+int wlbar_init(int height, int position) {
     if (height <= 0) height = 28;
-    g_requested_height = height;
-    g_output_count     = 0;
+    g_requested_height   = height;
+    g_requested_position = (position == WLBAR_POSITION_BOTTOM
+                             ? WLBAR_POSITION_BOTTOM
+                             : WLBAR_POSITION_TOP);
+    g_output_count       = 0;
 
     g_display = wl_display_connect(NULL);
     if (!g_display) {
