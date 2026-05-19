@@ -47,15 +47,19 @@
 
 ;;; ---------- wlbar (C shim) FFI ----------
 
-(cffi:defcfun ("wlbar_init"      wlbar-init)     :int (height :int))
-(cffi:defcfun ("wlbar_shutdown"  wlbar-shutdown) :void)
-(cffi:defcfun ("wlbar_width"     wlbar-width)    :int)
-(cffi:defcfun ("wlbar_height"    wlbar-height)   :int)
-(cffi:defcfun ("wlbar_pixels"    wlbar-pixels)   :pointer)
-(cffi:defcfun ("wlbar_stride"    wlbar-stride)   :int)
-(cffi:defcfun ("wlbar_commit"    wlbar-commit)   :void)
-(cffi:defcfun ("wlbar_poll"      wlbar-poll)     :int (timeout :int))
-(cffi:defcfun ("wlbar_closed"    wlbar-closed)   :int)
+(cffi:defcfun ("wlbar_init"           wlbar-init)         :int (height :int))
+(cffi:defcfun ("wlbar_shutdown"       wlbar-shutdown)     :void)
+(cffi:defcfun ("wlbar_poll"           wlbar-poll)         :int (timeout :int))
+(cffi:defcfun ("wlbar_closed"         wlbar-closed)       :int)
+
+;; Per-output API (added when multi-monitor support landed).
+(cffi:defcfun ("wlbar_output_count"   wlbar-output-count)   :int)
+(cffi:defcfun ("wlbar_output_width"   wlbar-output-width)   :int (i :int))
+(cffi:defcfun ("wlbar_output_height"  wlbar-output-height)  :int (i :int))
+(cffi:defcfun ("wlbar_output_pixels"  wlbar-output-pixels)  :pointer (i :int))
+(cffi:defcfun ("wlbar_output_stride"  wlbar-output-stride)  :int (i :int))
+(cffi:defcfun ("wlbar_output_commit"  wlbar-output-commit)  :void (i :int))
+(cffi:defcfun ("wlbar_output_name"    wlbar-output-name)    :string (i :int))
 
 ;;; ---------- cairo FFI ----------
 
@@ -191,26 +195,23 @@ module-fragments helper already inserts space fragments)."
         (incf pen (cairo-text-width cr text))))
     pen))
 
-(defun render-frame (instances)
-  "Paint a single frame: clear, then draw left | center | right text."
-  (let* ((w (wlbar-width))
-         (h (wlbar-height))
-         (data (wlbar-pixels))
-         (stride (wlbar-stride)))
+(defun render-output (i instances)
+  "Paint output index I.  Returns NIL when the output is unmapped."
+  (let* ((w      (wlbar-output-width i))
+         (h      (wlbar-output-height i))
+         (data   (wlbar-output-pixels i))
+         (stride (wlbar-output-stride i)))
     (when (or (zerop w) (zerop h) (cffi:null-pointer-p data))
-      (return-from render-frame))
+      (return-from render-output nil))
     (let* ((surf (cairo-isc4d data +cairo-format-argb32+ w h stride))
            (cr   (cairo-create surf)))
       (unwind-protect
            (progn
-             ;; Background
              (apply #'cairo-set-source-rgba cr
                     (rgba->doubles (theme-color :bg)))
              (cairo-paint cr)
-             ;; Font
              (cairo-select-font-face cr *wayland-font-family* 0 0)
              (cairo-set-font-size cr *wayland-font-size*)
-
              (let* ((left   (module-fragments
                              (collect-modules-for :left   instances)))
                     (center (module-fragments
@@ -229,7 +230,13 @@ module-fragments helper already inserts space fragments)."
                    (draw-fragments cr right (- w rw pad) baseline)))))
         (cairo-destroy cr)
         (cairo-surface-destroy surf)))
-    (wlbar-commit)))
+    (wlbar-output-commit i)
+    t))
+
+(defun render-frame (instances)
+  "Paint every output's surface."
+  (loop for i from 0 below (wlbar-output-count)
+        do (render-output i instances)))
 
 ;;; ---------- Main loop ----------
 
@@ -244,7 +251,7 @@ module-fragments helper already inserts space fragments)."
 
   (let* ((height (or (getf config :height) 28))
          (rc     (wlbar-init height)))
-    (when (/= rc 0)
+    (when (< rc 0)
       (logmsg :error "wlbar_init failed; falling back to :stdout")
       (run-stdout config)
       (return-from run-wayland)))
@@ -252,8 +259,12 @@ module-fragments helper already inserts space fragments)."
   (unwind-protect
        (let ((instances (build-instances config))
              (tick      (or (getf config :tick) 1.0)))
-         (logmsg :info "wayland driver up: ~dx~d, ~d modules, tick=~as"
-                 (wlbar-width) (wlbar-height) (length instances) tick)
+         (logmsg :info "wayland driver up: ~d output(s), ~d modules, tick=~as"
+                 (wlbar-output-count) (length instances) tick)
+         (loop for i from 0 below (wlbar-output-count) do
+               (logmsg :info "  output ~d: ~ax~a ~a"
+                       i (wlbar-output-width i) (wlbar-output-height i)
+                       (or (wlbar-output-name i) "?")))
          (render-frame instances)
          (loop while (and *running* (zerop (wlbar-closed))) do
                (wlbar-poll (round (* tick 1000)))

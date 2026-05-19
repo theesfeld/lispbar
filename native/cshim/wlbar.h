@@ -1,9 +1,9 @@
 /* wlbar.h - C shim that hides Wayland protocol details from SBCL.
  *
- * The bar binary is a Common Lisp program; this shim takes care of
- * the bits that need codegen against the wlr-layer-shell XML, namely
- * binding global objects, creating the layer surface, allocating a
- * wl_shm buffer, and dispatching events.  SBCL FFIs in through CFFI.
+ * Multi-output: this shim creates one layer-shell surface per
+ * wl_output the compositor exposes (so the bar appears on every
+ * monitor) and lets the Lisp side address each by index.  The
+ * legacy single-output accessors are aliases for index 0.
  */
 
 #ifndef LISPBAR_WLBAR_H
@@ -17,51 +17,51 @@ extern "C" {
 
 /* Lifecycle ------------------------------------------------------- */
 
-/* Connect to the compositor and create a layer-shell surface anchored
- * to the top edge of the default output with HEIGHT pixels of
- * exclusive zone.  Returns 0 on success, -1 on failure.  Must be the
- * first call.  After a successful return, wlbar_width() gives the
- * surface width in pixels. */
+/* Connect to the compositor and create one layer-shell surface per
+ * connected wl_output, anchored to the top edge of each with HEIGHT
+ * pixels of exclusive zone.  Returns the number of surfaces created
+ * (>= 1) on success or -1 on failure. */
 int   wlbar_init(int height);
 
-/* Release every Wayland object and disconnect.  Safe to call multiple
- * times.  After this returns, the bar is no longer mapped. */
+/* Release every Wayland object and disconnect.  Safe to call
+ * repeatedly. */
 void  wlbar_shutdown(void);
 
-/* Width / height (pixels) of the current surface, valid only after
- * the first wlbar_init() succeeds and the first configure event has
- * been received (which happens during wlbar_init). */
-int   wlbar_width(void);
-int   wlbar_height(void);
+/* Per-output API -------------------------------------------------- */
 
-/* Buffer access --------------------------------------------------- */
+/* How many surfaces are currently mapped.  Stable between init and
+ * shutdown except when the compositor adds/removes outputs at run
+ * time (in which case wlbar_poll() refreshes the count). */
+int   wlbar_output_count(void);
 
-/* Pointer to a wlbar_width() * wlbar_height() ARGB32 pixel buffer.
- * The caller (Lisp) draws into this with cairo, then calls
- * wlbar_commit() to push the frame.  Returns NULL on failure. */
-uint32_t *wlbar_pixels(void);
+int       wlbar_output_width   (int i);
+int       wlbar_output_height  (int i);
+uint32_t *wlbar_output_pixels  (int i);
+int       wlbar_output_stride  (int i);
+void      wlbar_output_commit  (int i);
 
-/* The stride in bytes between successive rows of wlbar_pixels(),
- * always wlbar_width()*4 in the current implementation. */
-int   wlbar_stride(void);
+/* Returns the wl_output name string (e.g. "DP-1"), or NULL if the
+ * compositor never told us. */
+const char *wlbar_output_name  (int i);
 
-/* Submit the current contents of wlbar_pixels() to the compositor.
- * Damages the whole surface. */
-void  wlbar_commit(void);
+/* Legacy single-output aliases for wlbar_output_*(0). */
+int       wlbar_width  (void);
+int       wlbar_height (void);
+uint32_t *wlbar_pixels (void);
+int       wlbar_stride (void);
+void      wlbar_commit (void);
 
 /* Event loop ------------------------------------------------------ */
 
 /* Dispatch any pending Wayland events.  Blocks up to TIMEOUT_MS
  * milliseconds (-1 = forever).  Returns 1 if events were processed,
- * 0 on timeout, -1 on display error (caller should call shutdown). */
-int   wlbar_poll(int timeout_ms);
+ * 0 on timeout, -1 on display error. */
+int   wlbar_poll  (int timeout_ms);
 
-/* The compositor file descriptor; suitable for poll()/select() if
- * the caller wants to multiplex with other fds. */
-int   wlbar_fd(void);
+/* Compositor file descriptor (for poll/select multiplexing). */
+int   wlbar_fd    (void);
 
-/* Returns 1 once the compositor has sent the closed event for the
- * layer surface (e.g. monitor disconnect).  Caller should exit. */
+/* Returns 1 once every layer surface has been closed. */
 int   wlbar_closed(void);
 
 #ifdef __cplusplus
