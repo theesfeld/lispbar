@@ -1,112 +1,147 @@
 # lispbar (native)
 
-A standalone status-bar binary written in Common Lisp.
+A standalone Wayland status bar implemented in Common Lisp.
 
-The Elisp implementation that lives one directory up is an Emacs minor
-mode and requires Emacs as a runtime. This native build is what you
-spawn from your compositor config — like waybar — except every line
-of it is Lisp and its config is `~/.config/lispbar/config.lisp`,
-itself an s-expression.
+This is what the compositor spawns. It is to lispbar what waybar is
+to its config file — a real binary with a configuration file at
+`~/.config/lispbar/config.lisp`, not an Emacs plugin.
 
 ## Build
 
 ```sh
-make build          # produces ./lispbar (10 MB, self-contained)
-make install        # to /usr/local/bin/lispbar
+make build              # produces ./lispbar (12 MB, self-contained)
+sudo make install       # /usr/local/{bin,lib,share}/lispbar/...
 ```
 
-Requires SBCL ≥ 2.0. `sb-ext:save-lisp-and-die` produces the binary;
-the SBCL runtime is embedded, no separate Lisp install needed on the
-target machine.
+Requirements:
+
+| Required                       | Purpose                                 |
+| ------------------------------ | --------------------------------------- |
+| SBCL ≥ 2.0 + Quicklisp (CFFI)  | builds the binary                       |
+| libwayland-client              | talks to the compositor                 |
+| wayland-protocols + scanner    | code-generates the layer-shell glue     |
+| libcairo                       | pixel rendering                         |
+| libpangocairo, libpango (opt.) | proper text shaping / font fallback     |
+
+The binary is built once on your machine and runs anywhere that has
+those shared libraries available — there's no Lisp dependency on the
+target host because SBCL's runtime is embedded.
 
 ## Use
 
 ```sh
-# One-shot render, plain text
-./lispbar --once
-
-# One-shot, JSON (drop-in waybar custom-module driver)
-./lispbar --once --output json
-
-# Streaming (re-renders every tick)
-./lispbar
-
-# List the available modules
-./lispbar --list-modules
+./lispbar                      # streams forever, picks driver from config
+./lispbar --once               # one frame to stdout (handy for scripts)
+./lispbar --output json        # waybar-compatible JSON per tick
+./lispbar --list-modules       # registry inventory
+./lispbar --help
 ```
 
-### Config
+Add `lispbar` to your compositor startup (Sway `exec`, Hyprland
+`exec-once`, or `systemctl --user enable --now lispbar.service`).
+The bar is anchored to the top edge of every output via
+`wlr-layer-shell` — no window-rule snippets, no struts: it Just Works.
 
-`~/.config/lispbar/config.lisp` — see `examples/config.lisp`:
+### Configuration
+
+`~/.config/lispbar/config.lisp` is a Lisp file evaluated by the
+binary on startup.  Every form is one of:
 
 ```lisp
-(placement :left   (:clock))
-(placement :center ())
-(placement :right  (:cpu :memory :audio :bluetooth :brightness :battery))
-(tick     1.0)
-(output   :stdout)        ;; :stdout | :json | :wayland (planned)
-(log-level :info)
+(placement :left   (:workspaces))
+(placement :center (:media))
+(placement :right  (:cpu :memory :audio :bluetooth :brightness :battery :clock))
+
+(theme    :nordish)             ; or :gruvboxish :catppuccinish :doomish :minimal
+(font     "Sans Bold 11")       ; Pango font description
+(height   28)                   ; bar height in pixels
+(tick     1.0)                  ; refresh interval in seconds
+(output   :wayland)             ; :wayland :stdout :json
+(log-level :info)               ; :debug :info :warn :error
 ```
 
 Forms are evaluated top-to-bottom; later forms override earlier ones.
 
 ## Modules
 
-| Name         | Source                     |
-| ------------ | -------------------------- |
-| `:clock`     | local time                 |
-| `:cpu`       | `/proc/loadavg`            |
-| `:memory`    | `/proc/meminfo`            |
-| `:battery`   | `/sys/class/power_supply/` |
-| `:audio`     | `wpctl` → `pactl`          |
-| `:bluetooth` | `bluetoothctl`             |
-| `:brightness`| `brightnessctl` → sysfs    |
+| Name           | Source                       |
+| -------------- | ---------------------------- |
+| `:clock`       | local time                   |
+| `:workspaces`  | `swaymsg` / `hyprctl` IPC    |
+| `:media`       | `playerctl` (any MPRIS2)     |
+| `:cpu`         | `/proc/loadavg`              |
+| `:memory`      | `/proc/meminfo`              |
+| `:battery`     | `/sys/class/power_supply/`   |
+| `:audio`       | `wpctl` → `pactl` → `amixer` |
+| `:bluetooth`   | `bluetoothctl`               |
+| `:brightness`  | `brightnessctl` → sysfs      |
 
-Add your own with the `defmodule` macro:
+Add your own:
 
 ```lisp
-(defmodule :weather (:doc "OpenWeatherMap"
-                     :position :right :priority 40 :interval 600.0)
-  (lispbar:run-capture "curl" "-s" "wttr.in/?format=3"))
+(defmodule :weather (:doc "Open-Meteo current conditions"
+                     :position :right :priority 35 :interval 600.0)
+  (run-capture "curl" "-s" "wttr.in/?format=3"))
 ```
 
-Drop the file into the `src/modules/` directory and rebuild.
+Drop the file in `src/modules/`, add it to `lispbar.asd`, rebuild.
+
+### Module faces
+
+A module's update function returns one of:
+
+```lisp
+"plain text"                              ; → :normal face
+(:text "BAT -5%" :face :urgent)           ; one fragment, urgent
+(:fragments (("[" :muted)                 ; many fragments, each
+             ("2" :accent)                ; with its own face
+             ("]" :muted)))
+```
+
+Available faces: `:normal :accent :ok :warn :urgent :muted` (plus
+`:bg` for the bar background).  Every shipped theme defines the full
+palette, so themes work uniformly across modules.
+
+## Themes
+
+Built-in: `:adaptive` (default), `:minimal`, `:nordish`,
+`:gruvboxish`, `:catppuccinish`, `:doomish`.
 
 ## Output drivers
 
-| Output     | What it does                                       | Status   |
-| ---------- | -------------------------------------------------- | -------- |
-| `:stdout`  | One bar line per tick to stdout                    | shipping |
-| `:json`    | One waybar-compatible JSON object per tick         | shipping |
-| `:wayland` | Native `wlr-layer-shell` client (cairo)            | shipping |
+| Output     | What it does                                       |
+| ---------- | -------------------------------------------------- |
+| `:wayland` | Native `wlr-layer-shell` client, one surface per monitor, cairo + Pango rendering. |
+| `:stdout`  | Plain text, one bar line per tick.                 |
+| `:json`    | Waybar-compatible JSON object per tick (drop-in custom-module driver). |
 
-The JSON driver lets the binary serve as a custom module for
-**waybar**, **eww**, or **yambar** today:
+The JSON driver is what made early development bootable: until the
+Wayland path landed, lispbar plugged into waybar via:
 
 ```jsonc
 // ~/.config/waybar/config
 "custom/lispbar": {
   "exec": "lispbar --output json",
-  "return-type": "json",
-  "interval": "once"
+  "return-type": "json"
 }
 ```
 
+The `:wayland` driver makes that intermediate step unnecessary.
+
 ## How the Wayland driver works
 
-* `cshim/wlbar.c` is a small (~200 line) C glue that handles the parts
-  that *must* be C: the generated wlr-layer-shell marshalling tables,
-  binding the registry globals, allocating a `wl_shm` ARGB32 buffer,
-  and pumping `wl_display_dispatch`.  It exposes a flat ~10-symbol
-  API to the rest of the program.
-* `src/output/wayland.lisp` FFIs into `libwlbar.so` plus `libcairo.so.2`
-  (just 10 functions worth of cairo), gets the raw pixel pointer, and
-  paints the bar with cairo on every tick.
-* Everything user-facing — modules, config, theming, layout — stays in
-  Common Lisp.
+* `cshim/wlbar.c` is a ~300-line C glue layer.  It hides the parts
+  that *must* be C — the generated wlr-layer-shell marshalling
+  tables, binding registry globals, allocating wl_shm ARGB32 buffers,
+  pumping `wl_display_dispatch` — behind a flat ~15-symbol API.
+* `src/output/wayland.lisp` FFIs into `libwlbar.so` and into a tight
+  set of cairo + pango functions.  It iterates `wlbar_output_count()`
+  each tick, paints each output's buffer, commits.
+* Everything user-facing — modules, config, theming, layout — stays
+  in Common Lisp.
 
 That separation is why the binary stays "Lispy" without re-implementing
-the Wayland protocol wire format by hand.
+the Wayland wire format by hand.
 
 ## Layout
 
@@ -115,22 +150,23 @@ native/
 ├── lispbar.asd                ASDF system (depends on cffi)
 ├── build.lisp                 sb-ext:save-lisp-and-die driver
 ├── Makefile                   make build / install / test
+├── systemd/lispbar.service    user unit
 ├── protocols/
 │   └── wlr-layer-shell-unstable-v1.xml
 ├── cshim/
 │   ├── wlbar.c                C glue (uses generated marshalling)
-│   ├── wlbar.h                10-symbol FFI surface
+│   ├── wlbar.h                ~15-symbol FFI surface
 │   └── Makefile               builds libwlbar.so
 ├── src/
 │   ├── package.lisp           Common Lisp package
 │   ├── log.lisp               stderr logger
 │   ├── config.lisp            config DSL loader
-│   ├── module.lisp            defmodule macro + registry
-│   ├── modules/               clock, cpu, memory, battery, audio,
-│   │                          bluetooth, brightness
+│   ├── module.lisp            defmodule macro + registry + faces
+│   ├── modules/               clock, workspaces, media, cpu, memory,
+│   │                          battery, audio, bluetooth, brightness
 │   ├── output/
 │   │   ├── stdout.lisp        text + JSON drivers
-│   │   └── wayland.lisp       layer-shell driver (libwlbar + cairo)
+│   │   └── wayland.lisp       layer-shell driver
 │   └── main.lisp              entry, arg parsing, signal handlers
 └── examples/config.lisp
 ```
