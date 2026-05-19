@@ -357,7 +357,10 @@ static char *svg_to_cached_png(const char *svg_path, int size_px) {
     {
         char mkbuf[1024];
         snprintf(mkbuf, sizeof mkbuf, "mkdir -p '%s' 2>/dev/null", cache_root);
-        system(mkbuf);
+        /* If the dir already exists or `mkdir' isn't on PATH, the
+         * subsequent file write will simply fail and we fall back to
+         * text. */
+        (void)!system(mkbuf);
     }
 
     size_t out_n = strlen(cache_root) + 64;
@@ -541,17 +544,6 @@ static void item_register(const char *bus, const char *path) {
 }
 
 /* ---- Watcher service: method dispatch ---- */
-
-static int find_item_by_sender(const char *sender) {
-    /* Sender may be the unique :1.N or the well-known
-     * org.kde.StatusNotifierItem-... name; try both. */
-    if (!sender) return -1;
-    int idx = find_item(sender);
-    if (idx >= 0) return idx;
-    /* Otherwise look up the unique owner of each tracked bus name
-     * and compare; this is rare enough that linear search is fine. */
-    return -1;
-}
 
 static DBusHandlerResult watcher_filter(DBusConnection *conn,
                                         DBusMessage *msg, void *data) {
