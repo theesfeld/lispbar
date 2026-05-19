@@ -23,9 +23,13 @@ extern "C" {
 
 /* Connect to the compositor and create one layer-shell surface per
  * connected wl_output, anchored to POSITION (WLBAR_POSITION_TOP or
- * _BOTTOM) with HEIGHT pixels of exclusive zone.  Returns the
+ * _BOTTOM) with HEIGHT pixels of exclusive zone.  The four margin
+ * arguments are in pixels (top, right, bottom, left) and gap the bar
+ * away from its anchor edges (use 0 for a flush bar).  Returns the
  * number of surfaces created (>= 1) on success or -1 on failure. */
-int   wlbar_init(int height, int position);
+int   wlbar_init(int height, int position,
+                 int margin_top, int margin_right,
+                 int margin_bottom, int margin_left);
 
 /* Release every Wayland object and disconnect.  Safe to call
  * repeatedly. */

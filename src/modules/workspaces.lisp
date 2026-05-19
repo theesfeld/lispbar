@@ -114,17 +114,58 @@ Splits on top-level brace boundaries; ignores braces inside strings."
         (setf names (mapcar #'cdr (sort ids #'< :key #'car)))
         (and names (list names focused))))))
 
+(defun workspaces-niri ()
+  "Return (NAMES FOCUSED-NAME) for niri, or NIL on failure.
+niri's `niri msg workspaces' prints one workspace per line in the
+form `* 1' (focused) or `  2' (unfocused).  We parse that."
+  (let ((out (run-capture "niri" "msg" "workspaces")))
+    (when out
+      (let ((lines (uiop:split-string out :separator '(#\Newline)))
+            names focused)
+        (dolist (line lines)
+          (when (>= (length line) 3)
+            (let ((focused-p (char= (char line 0) #\*))
+                  (rest (string-trim '(#\Space #\Tab #\*) line)))
+              (when (plusp (length rest))
+                (let ((name (first (uiop:split-string rest))))
+                  (push name names)
+                  (when focused-p (setf focused name)))))))
+        (when names (list (nreverse names) focused))))))
+
+(defvar *workspaces-source-cache* :unprobed
+  "Cached result of `detect-workspaces-source' to avoid spawning IPC
+helper processes on every tick.")
+
 (defun detect-workspaces-source ()
-  "Return :sway, :hyprland, or NIL based on env vars."
-  (cond
-    ((uiop:getenv "SWAYSOCK")                  :sway)
-    ((uiop:getenv "HYPRLAND_INSTANCE_SIGNATURE") :hyprland)))
+  "Return :sway, :hyprland, :niri, or NIL.
+Looks at the obvious env vars first, then falls back to probing the
+IPC helper itself in case env vars didn't propagate (which happens
+when the bar is started by a service manager rather than the
+compositor's exec hook).  The result is cached after first call."
+  (unless (eq *workspaces-source-cache* :unprobed)
+    (return-from detect-workspaces-source *workspaces-source-cache*))
+  (let ((source
+         (or (and (uiop:getenv "SWAYSOCK")                    :sway)
+             (and (uiop:getenv "HYPRLAND_INSTANCE_SIGNATURE") :hyprland)
+             (and (uiop:getenv "NIRI_SOCKET")                 :niri)
+             ;; Env vars absent - probe the IPC helpers themselves.
+             (and (run-capture "swaymsg" "--version")         :sway)
+             (and (run-capture "hyprctl" "version")           :hyprland)
+             (and (run-capture "niri"    "msg" "version")     :niri))))
+    (when source
+      (logmsg :info "workspaces backend detected: ~a" source))
+    (unless source
+      (logmsg :debug "no workspaces backend detected (sway/hyprland/niri); ~
+module will stay silent"))
+    (setf *workspaces-source-cache* source)
+    source))
 
 (defun workspaces-fetch ()
   "Return (NAMES FOCUSED) for the active compositor, or NIL."
   (case (detect-workspaces-source)
     (:sway     (workspaces-sway))
-    (:hyprland (workspaces-hyprland))))
+    (:hyprland (workspaces-hyprland))
+    (:niri     (workspaces-niri))))
 
 ;;; ---- The module ----
 

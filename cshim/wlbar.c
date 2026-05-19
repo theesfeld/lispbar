@@ -62,6 +62,10 @@ static struct bar_output  g_outputs[MAX_OUTPUTS];
 static int                g_output_count     = 0;
 static int                g_requested_height = 28;
 static int                g_requested_position = WLBAR_POSITION_TOP;
+static int                g_margin_top    = 0;
+static int                g_margin_right  = 0;
+static int                g_margin_bottom = 0;
+static int                g_margin_left   = 0;
 
 /* ---- Forward decls ---- */
 
@@ -251,8 +255,17 @@ static int bar_output_open(struct bar_output *bo) {
          : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
     zwlr_layer_surface_v1_set_anchor(bo->layer_surface, anchor);
     zwlr_layer_surface_v1_set_size(bo->layer_surface, 0, g_requested_height);
-    zwlr_layer_surface_v1_set_exclusive_zone(bo->layer_surface,
-                                              g_requested_height);
+    zwlr_layer_surface_v1_set_margin(bo->layer_surface,
+                                     g_margin_top,    g_margin_right,
+                                     g_margin_bottom, g_margin_left);
+    /* Reserve enough screen real-estate for the bar plus its own
+     * outer margin on the anchor side. */
+    {
+        int outer = (g_requested_position == WLBAR_POSITION_BOTTOM
+                     ? g_margin_bottom : g_margin_top);
+        zwlr_layer_surface_v1_set_exclusive_zone(bo->layer_surface,
+                                                  g_requested_height + outer);
+    }
     zwlr_layer_surface_v1_set_keyboard_interactivity(
         bo->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
     zwlr_layer_surface_v1_add_listener(bo->layer_surface, &layer_listener, bo);
@@ -276,13 +289,19 @@ static void bar_output_close(struct bar_output *bo) {
 
 /* ---- Public API ---- */
 
-int wlbar_init(int height, int position) {
+int wlbar_init(int height, int position,
+               int margin_top, int margin_right,
+               int margin_bottom, int margin_left) {
     if (height <= 0) height = 28;
     g_requested_height   = height;
     g_requested_position = (position == WLBAR_POSITION_BOTTOM
                              ? WLBAR_POSITION_BOTTOM
                              : WLBAR_POSITION_TOP);
-    g_output_count       = 0;
+    g_margin_top    = margin_top    < 0 ? 0 : margin_top;
+    g_margin_right  = margin_right  < 0 ? 0 : margin_right;
+    g_margin_bottom = margin_bottom < 0 ? 0 : margin_bottom;
+    g_margin_left   = margin_left   < 0 ? 0 : margin_left;
+    g_output_count  = 0;
 
     g_display = wl_display_connect(NULL);
     if (!g_display) {
