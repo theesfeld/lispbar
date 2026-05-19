@@ -44,7 +44,9 @@
 (require 'cl-lib)
 (require 'eieio)
 (require 'lispbar-modules)
-(require 'lispbar-exwm)
+(require 'lispbar-backend)
+;; lispbar-exwm is loaded only when running under EXWM.  Functions
+;; from it are guarded behind `fboundp' checks below.
 
 ;;; Customization
 
@@ -216,26 +218,32 @@ Returns a cons cell (open . close) or nil for 'none style."
 
 (defun lispbar-workspace--count-windows-in-workspace (workspace-index)
   "Count windows in WORKSPACE-INDEX.
-Returns the number of windows in the workspace."
-  (if (lispbar-exwm-available-p)
-      (condition-case nil
-          (let ((count 0))
-            (dolist (buffer (buffer-list))
-              (with-current-buffer buffer
-                (when (and (eq major-mode 'exwm-mode)
-                           (boundp 'exwm--frame)
-                           exwm--frame
-                           (frame-live-p exwm--frame))
-                  (let ((frame-workspace (frame-parameter exwm--frame 'exwm-workspace)))
-                    (when (eq frame-workspace workspace-index)
-                      (cl-incf count))))))
-            count)
-        (error 0))
-    0))
+Returns the number of windows in the workspace, or 0 when the
+active backend cannot enumerate windows per workspace."
+  (cond
+   ;; EXWM: walk the buffer list and look at each exwm-mode buffer.
+   ((and (fboundp 'lispbar-exwm-available-p)
+         (lispbar-exwm-available-p))
+    (condition-case nil
+        (let ((count 0))
+          (dolist (buffer (buffer-list))
+            (with-current-buffer buffer
+              (when (and (eq major-mode 'exwm-mode)
+                         (boundp 'exwm--frame)
+                         exwm--frame
+                         (frame-live-p exwm--frame))
+                (let ((frame-workspace (frame-parameter exwm--frame 'exwm-workspace)))
+                  (when (eq frame-workspace workspace-index)
+                    (cl-incf count))))))
+          count)
+      (error 0)))
+   ;; Other backends do not yet expose per-workspace window counts.
+   (t 0)))
 
 (defun lispbar-workspace--update-window-counts ()
   "Update cached window counts for all workspaces."
-  (let ((workspace-count (length (lispbar-exwm-workspace-names))))
+  (let* ((b (lispbar-backend-current))
+         (workspace-count (length (and b (lispbar-backend-workspace-names b)))))
     (setq lispbar-workspace--window-counts
           (cl-loop for i from 0 below workspace-count
                    collect (cons i (lispbar-workspace--count-windows-in-workspace i))))))
@@ -304,8 +312,10 @@ MODULE is the workspace module instance."
 (defun lispbar-workspace--get-display-content (module)
   "Get formatted display content for workspace MODULE.
 Returns propertized string ready for display."
-  (let* ((current-workspace (or (lispbar-exwm-current-workspace) 0))
-         (workspace-names (or (lispbar-exwm-workspace-names) '("1" "2" "3" "4")))
+  (let* ((b (lispbar-backend-current))
+         (current-workspace (or (and b (lispbar-backend-current-workspace b)) 0))
+         (workspace-names (or (and b (lispbar-backend-workspace-names b))
+                              '("1" "2" "3" "4")))
          (separator (oref module separator))
          (workspace-strings nil))
     
@@ -410,9 +420,10 @@ Creates and registers the workspace module if not already enabled."
       (unless lispbar-modules--initialized
         (lispbar-modules-init))
       
-      ;; Ensure EXWM integration is initialized
-      (unless lispbar-exwm--initialized
-        (lispbar-exwm-init))
+      ;; Ensure the active backend is initialised; this brings up
+      ;; EXWM integration, Sway/Hyprland pollers, etc.
+      (when-let* ((backend (lispbar-backend-current)))
+        (ignore-errors (lispbar-backend-init backend)))
       
       ;; Create and register module
       (let ((module (lispbar-workspace--create-module)))
@@ -474,33 +485,37 @@ Useful after changing workspace customization options."
   "Switch to WORKSPACE-INDEX (0-indexed).
 When called interactively, prompts for workspace number (1-indexed)."
   (interactive
-   (list (1- (read-number "Switch to workspace: " 
-                          (1+ (or (lispbar-exwm-current-workspace) 0))))))
-  (when (lispbar-exwm-available-p)
+   (list (1- (read-number
+              "Switch to workspace: "
+              (1+ (or (lispbar-backend-current-workspace
+                       (lispbar-backend-current))
+                      0))))))
+  (let ((b (lispbar-backend-current)))
     (condition-case err
-        (progn
-          (exwm-workspace-switch workspace-index)
-          (message "Switched to workspace %d" (1+ workspace-index)))
-      (error
-       (message "Failed to switch workspace: %s" err)))))
+        (if (and b (lispbar-backend-switch-workspace b workspace-index))
+            (message "Switched to workspace %d" (1+ workspace-index))
+          (message "Backend cannot switch workspaces"))
+      (error (message "Failed to switch workspace: %s" err)))))
 
 ;;;###autoload
 (defun lispbar-workspace-next ()
   "Switch to next workspace, wrapping around if necessary."
   (interactive)
-  (let* ((current (or (lispbar-exwm-current-workspace) 0))
-         (total (length (lispbar-exwm-workspace-names)))
-         (next (mod (1+ current) total)))
-    (lispbar-workspace-switch-to next)))
+  (let* ((b (lispbar-backend-current))
+         (current (or (and b (lispbar-backend-current-workspace b)) 0))
+         (total (length (and b (lispbar-backend-workspace-names b)))))
+    (when (> total 0)
+      (lispbar-workspace-switch-to (mod (1+ current) total)))))
 
 ;;;###autoload
 (defun lispbar-workspace-prev ()
   "Switch to previous workspace, wrapping around if necessary."
   (interactive)
-  (let* ((current (or (lispbar-exwm-current-workspace) 0))
-         (total (length (lispbar-exwm-workspace-names)))
-         (prev (mod (1- current) total)))
-    (lispbar-workspace-switch-to prev)))
+  (let* ((b (lispbar-backend-current))
+         (current (or (and b (lispbar-backend-current-workspace b)) 0))
+         (total (length (and b (lispbar-backend-workspace-names b)))))
+    (when (> total 0)
+      (lispbar-workspace-switch-to (mod (1- current) total)))))
 
 ;;; Status and Information Functions
 
@@ -511,8 +526,9 @@ Shows configuration and current workspace information."
   (interactive)
   (if lispbar-workspace--enabled
       (let* ((module lispbar-workspace--module-instance)
-             (current-ws (or (lispbar-exwm-current-workspace) 0))
-             (ws-names (lispbar-exwm-workspace-names))
+             (b (lispbar-backend-current))
+             (current-ws (or (and b (lispbar-backend-current-workspace b)) 0))
+             (ws-names (and b (lispbar-backend-workspace-names b)))
              (display-mode (oref module display-mode))
              (position (oref module position))
              (priority (oref module priority))
@@ -533,9 +549,11 @@ Shows configuration and current workspace information."
 (defun lispbar-workspace-info ()
   "Display detailed workspace information including window counts."
   (interactive)
-  (if (lispbar-exwm-available-p)
-      (let* ((current-ws (or (lispbar-exwm-current-workspace) 0))
-             (ws-names (lispbar-exwm-workspace-names))
+  (let* ((b (lispbar-backend-current))
+         (ws-names (and b (lispbar-backend-workspace-names b))))
+    (if (not ws-names)
+        (message "Active backend exposes no workspace information")
+      (let* ((current-ws (or (lispbar-backend-current-workspace b) 0))
              (info-lines nil))
         
         ;; Update window counts
@@ -551,9 +569,8 @@ Shows configuration and current workspace information."
                                   name
                                   window-count)
                           info-lines))
-        
-        (message (mapconcat #'identity (nreverse info-lines) "\n")))
-    (message "EXWM not available")))
+
+        (message (mapconcat #'identity (nreverse info-lines) "\n"))))))
 
 ;;; Module Cleanup
 

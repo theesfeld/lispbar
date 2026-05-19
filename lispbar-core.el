@@ -2,32 +2,33 @@
 
 ;; Copyright (C) 2025 Free Software Foundation, Inc.
 
-;; Author: Your Name
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1") (exwm "0.24"))
-;; Keywords: frames, exwm
-;; URL: https://github.com/yourusername/lispbar
+;; Author: Lispbar contributors
+;; Version: 0.2.0
+;; Package-Requires: ((emacs "27.1"))
+;; Keywords: frames, wayland, exwm, x11
+;; URL: https://github.com/theesfeld/lispbar
 
 ;;; Commentary:
 
 ;; This module provides the core frame management functionality for Lispbar.
-;; It handles creation, positioning, and lifecycle management of the toolbar
-;; frames, with support for multi-monitor setups and proper EXWM integration.
+;; Display-server specific behaviour (X11/EXWM struts, Wayland compositor
+;; queries, monitor enumeration, hot-plug detection) is delegated to
+;; `lispbar-backend' objects, so the same core runs on EXWM, Sway,
+;; Hyprland, generic Wayland (PGTK) and plain graphical Emacs.
 ;;
-;; The core module ensures that frames are properly positioned, undecorated,
-;; and sticky across all workspaces. It provides the foundation for the
-;; rendering and module systems.
+;; The core ensures frames are positioned, undecorated, and sticky.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'eieio)
+(require 'lispbar-backend)
 
 ;;; Variables
 
 (defgroup lispbar nil
   "Customization group for Lispbar."
-  :group 'exwm
+  :group 'frames
   :prefix "lispbar-")
 
 (defgroup lispbar-monitor nil
@@ -416,24 +417,28 @@ Uses caching to improve performance."
     (_ (lispbar--auto-detect-monitors))))
 
 (defun lispbar--auto-detect-monitors ()
-  "Automatically choose the best monitor detection method available."
-  (cond
-   ;; Try EXWM RandR first (most comprehensive)
-   ((and (boundp 'exwm-randr-workspace-monitor-plist)
-         exwm-randr-workspace-monitor-plist
-         (lispbar--exwm-randr-available-p))
-    (lispbar--detect-via-exwm-randr))
-   
-   ;; Try xrandr command
-   ((executable-find "xrandr")
-    (lispbar--detect-via-xrandr))
-   
-   ;; Try EWMH properties
-   ((display-graphic-p)
-    (lispbar--detect-via-ewmh))
-   
-   ;; Fall back to basic detection
-   (t (lispbar--fallback-monitor-detection))))
+  "Automatically choose the best monitor detection method available.
+Delegates to the active `lispbar-backend' first so each display
+server returns its own native data (EXWM RandR, swaymsg, hyprctl,
+display-monitor-attributes-list).  Falls back to legacy X11 paths
+when no backend can detect monitors."
+  (let* ((backend (lispbar-backend-current))
+         (via-backend (and backend
+                           (ignore-errors
+                             (lispbar-backend-detect-monitors backend)))))
+    (cond
+     (via-backend via-backend)
+     ;; Legacy X11 fallbacks (kept so users can force a specific path
+     ;; via `lispbar-monitor-detection-method').
+     ((and (boundp 'exwm-randr-workspace-monitor-plist)
+           exwm-randr-workspace-monitor-plist
+           (lispbar--exwm-randr-available-p))
+      (lispbar--detect-via-exwm-randr))
+     ((executable-find "xrandr")
+      (lispbar--detect-via-xrandr))
+     ((display-graphic-p)
+      (lispbar--detect-via-ewmh))
+     (t (lispbar--fallback-monitor-detection)))))
 
 (defun lispbar--exwm-randr-available-p ()
   "Check if EXWM RandR is available and functional."
@@ -1197,26 +1202,18 @@ CONFIG contains monitor-specific frame configuration."
     params))
 
 (defun lispbar--configure-frame (frame geometry &optional config)
-  "Configure FRAME after creation with GEOMETRY and CONFIG."
-  (with-selected-frame frame
-    ;; Set frame to be sticky and always on top
-    (when (fboundp 'x-change-window-property)
-      ;; Set window type to dock for docked positions, normal for floating
-      (let ((position (plist-get geometry :position)))
-        (if (eq position 'floating)
-            (x-change-window-property 
-             "_NET_WM_WINDOW_TYPE" "_NET_WM_WINDOW_TYPE_NORMAL" 
-             frame nil 'ATOM 32 t)
-          (x-change-window-property 
-           "_NET_WM_WINDOW_TYPE" "_NET_WM_WINDOW_TYPE_DOCK" 
-           frame nil 'ATOM 32 t)))
-      
-      ;; Set window to be sticky (visible on all workspaces)
-      (x-change-window-property 
-       "_NET_WM_DESKTOP" 0xFFFFFFFF frame nil 'CARDINAL 32 t)
-      
-      ;; Handle strut reservation for non-floating positions
-      (lispbar--configure-frame-struts frame geometry config))))
+  "Configure FRAME after creation with GEOMETRY and CONFIG.
+Dispatches display-server-specific work (window-type hints,
+struts, layer-shell anchors) to the active backend."
+  (let ((backend (lispbar-backend-current)))
+    (when backend
+      (condition-case e
+          (lispbar-backend-configure-frame backend frame geometry)
+        (error (lispbar--log 'warning "Backend frame configuration failed: %s" e)))))
+  ;; Strut conflict resolution (X11 only) is preserved as opt-in.
+  (when (and (eq (framep frame) 'x)
+             (fboundp 'x-change-window-property))
+    (lispbar--configure-frame-struts frame geometry config)))
 
 (defun lispbar--configure-frame-struts (frame geometry config)
   "Configure strut reservation for FRAME with GEOMETRY and CONFIG."
@@ -1792,18 +1789,15 @@ FRAME is the frame, OLD-WIDTH and NEW-WIDTH are in pixels."
 ;;; Enhanced Hotplug Handling
 
 (defun lispbar--setup-monitor-hotplug-detection ()
-  "Set up enhanced monitor hotplug detection."
+  "Set up enhanced monitor hotplug detection.
+Backend-specific hotplug subscription is handled by
+`lispbar-backend-register-hotplug', invoked during `lispbar-init'.
+This function only sets up legacy X11 RandR fallbacks and any
+backend-independent watchers."
   (lispbar--log 'debug "Setting up monitor hotplug detection")
-  
-  ;; Enhanced EXWM RandR hook
-  (when (featurep 'exwm-randr)
-    (add-hook 'exwm-randr-screen-change-hook #'lispbar--handle-monitor-hotplug)
-    (lispbar--add-cleanup-function 
-     (lambda () 
-       (remove-hook 'exwm-randr-screen-change-hook #'lispbar--handle-monitor-hotplug))))
-  
-  ;; Additional X11 property change detection if available
-  (when (display-graphic-p)
+  ;; Additional X11 property change detection where applicable.
+  (when (and (display-graphic-p)
+             (eq window-system 'x))
     (lispbar--setup-x11-property-monitoring)))
 
 (defun lispbar--handle-monitor-hotplug ()
@@ -2097,20 +2091,31 @@ CALLBACK should accept (OLD-MONITORS NEW-MONITORS) arguments."
 This function sets up comprehensive monitor detection, configuration
 management, and frame creation with hotplug support."
   (interactive)
-  (when lispbar--initialized
-    (lispbar--log 'warning "Lispbar already initialized")
-    (return-from lispbar-init))
-  
+  (if lispbar--initialized
+      (lispbar--log 'warning "Lispbar already initialized")
+    (lispbar--init-1)))
+
+(defun lispbar--init-1 ()
+  "Internal worker for `lispbar-init'."
   (lispbar--log 'info "Initializing enhanced Lispbar core system")
   
   (condition-case err
       (progn
+        ;; Initialize backend (X11/EXWM, Wayland, generic, ...)
+        (let ((backend (lispbar-backend-current)))
+          (lispbar--log 'info "Lispbar backend: %s"
+                        (and backend (lispbar-backend-describe backend)))
+          (when backend
+            (lispbar-backend-init backend)
+            (lispbar-backend-register-hotplug
+             backend #'lispbar--handle-monitor-hotplug)))
+
         ;; Initialize enhanced monitor system
         (lispbar--log 'debug "Initializing monitor management")
-        
+
         ;; Load persistent configurations
         (lispbar--load-monitor-configurations)
-        
+
         ;; Detect monitors with comprehensive properties
         (setq lispbar--monitors (lispbar--detect-monitors))
         (lispbar--log 'info "Detected %d monitors using method: %s" 
@@ -2155,6 +2160,13 @@ This function removes all frames, cleans up monitoring, and runs cleanup functio
   (interactive)
   (lispbar--log 'info "Cleaning up enhanced Lispbar system")
   
+  ;; Shut down the active backend if any
+  (let ((backend (and (fboundp 'lispbar-backend-current)
+                      (lispbar-backend-current))))
+    (when backend
+      (condition-case e (lispbar-backend-cleanup backend)
+        (error (lispbar--log 'warning "Backend cleanup failed: %s" e)))))
+
   ;; Cancel any pending timers
   (when lispbar--monitor-hotplug-timer
     (cancel-timer lispbar--monitor-hotplug-timer)

@@ -1,12 +1,12 @@
-;;; lispbar.el --- A modular status bar for EXWM -*- lexical-binding: t -*-
+;;; lispbar.el --- A modular status bar for Emacs (EXWM, Sway, Hyprland) -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Free Software Foundation, Inc.
 
-;; Author: Your Name <your.email@example.com>
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1") (exwm "0.24") (eieio "1.4") (cl-lib "0.5"))
-;; Keywords: frames, exwm, status-bar, toolbar
-;; URL: https://github.com/yourusername/lispbar
+;; Author: Lispbar contributors
+;; Version: 0.2.0
+;; Package-Requires: ((emacs "27.1"))
+;; Keywords: frames, wayland, exwm, status-bar, toolbar
+;; URL: https://github.com/theesfeld/lispbar
 
 ;;; Commentary:
 
@@ -57,18 +57,26 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'lispbar-backend)
+(require 'lispbar-backend-wayland)
 (require 'lispbar-core)
 (require 'lispbar-render)
 (require 'lispbar-modules)
-(require 'lispbar-exwm)
+
+;; Load EXWM and its backend only if EXWM itself is present.  This
+;; keeps Lispbar usable on Wayland or plain X without EXWM installed.
+(when (locate-library "exwm")
+  (require 'lispbar-exwm nil t)
+  (require 'lispbar-backend-exwm nil t))
 
 ;;; Customization
 
 (defgroup lispbar nil
-  "Modular status bar for EXWM."
-  :group 'exwm
+  "Modular status bar for Emacs.
+Works on EXWM/X11, Sway, Hyprland, and plain Wayland (PGTK)."
+  :group 'frames
   :prefix "lispbar-"
-  :link '(url-link :tag "GitHub" "https://github.com/yourusername/lispbar"))
+  :link '(url-link :tag "GitHub" "https://github.com/theesfeld/lispbar"))
 
 (defcustom lispbar-auto-start-modules t
   "Whether to automatically start default modules when enabling lispbar-mode.
@@ -156,31 +164,32 @@ These modules will be cleaned up when lispbar-mode is disabled.")
                  :priority 90))
 
 (defun lispbar--create-workspace-module ()
-  "Create a workspace indicator module."
+  "Create a workspace indicator module driven by the active backend."
   (make-instance 'lispbar-module
                  :name 'workspace
-                 :update-fn (lambda ()
-                              (if (featurep 'lispbar-exwm)
-                                  (let ((current (lispbar-exwm-current-workspace))
-                                        (names (lispbar-exwm-workspace-names)))
-                                    (if (and current names)
-                                        (format "[%s]" (nth current names))
-                                      (format "[%s]" (or current "?"))))
-                                "[?]"))
-                 :hooks '(exwm-workspace-switch-hook)
+                 :update-fn
+                 (lambda ()
+                   (let* ((b (lispbar-backend-current))
+                          (current (and b (lispbar-backend-current-workspace b)))
+                          (names (and b (lispbar-backend-workspace-names b))))
+                     (cond
+                      ((and current names (nth current names))
+                       (format "[%s]" (nth current names)))
+                      (current (format "[%s]" current))
+                      (t "[?]"))))
                  :communicates '(workspace-changed)
                  :position 'left
                  :priority 80))
 
 (defun lispbar--create-window-title-module ()
-  "Create a window title display module."
+  "Create a window title display module driven by the active backend."
   (make-instance 'lispbar-module
                  :name 'window-title
-                 :update-fn (lambda ()
-                              (if (featurep 'lispbar-exwm)
-                                  (or (lispbar-exwm-window-title)
-                                      (buffer-name))
-                                (buffer-name)))
+                 :update-fn
+                 (lambda ()
+                   (or (when-let* ((b (lispbar-backend-current)))
+                         (lispbar-backend-window-title b))
+                       (buffer-name)))
                  :communicates '(window-focus-changed window-managed)
                  :position 'center
                  :priority 50
@@ -304,14 +313,12 @@ Returns t on success, nil on failure."
         (unless (lispbar-safe-call #'lispbar-modules-init)
           (error "Module system initialization failed"))
         
-        ;; Initialize EXWM integration (optional)
-        (when (featurep 'exwm)
-          (lispbar-log 'debug "Initializing EXWM integration")
-          (condition-case exwm-err
-              (lispbar-exwm-init)
-            (error
-             (lispbar-log 'warning "EXWM integration failed: %s" exwm-err)
-             (push exwm-err lispbar--initialization-errors))))
+        ;; Backend initialization is performed by `lispbar-init' in
+        ;; lispbar-core; nothing extra to do here.  Logging only.
+        (let ((backend (lispbar-backend-current)))
+          (when backend
+            (lispbar-log 'info "Active backend: %s"
+                         (lispbar-backend-describe backend))))
         
         (lispbar-log 'info "Subsystem initialization complete")
         t)
@@ -359,10 +366,7 @@ Returns t on success, nil on failure."
   "Clean up all Lispbar subsystems in reverse order."
   (lispbar-log 'info "Cleaning up Lispbar subsystems")
   
-  ;; Clean up EXWM integration first
-  (when (fboundp 'lispbar-exwm-cleanup)
-    (lispbar-log 'debug "Cleaning up EXWM integration")
-    (lispbar-safe-call #'lispbar-exwm-cleanup))
+  ;; Backend cleanup is performed by `lispbar-cleanup' in lispbar-core.
   
   ;; Clean up module system
   (when (fboundp 'lispbar-modules-cleanup)

@@ -773,10 +773,12 @@ This method should be overridden by specific module implementations."
 (defun lispbar-modules-init ()
   "Initialize the Lispbar module system."
   (interactive)
-  (when lispbar-modules--initialized
-    (lispbar-modules--log 'warning "Module system already initialized")
-    (return-from lispbar-modules-init))
-  
+  (if lispbar-modules--initialized
+      (lispbar-modules--log 'warning "Module system already initialized")
+    (lispbar-modules--init-1)))
+
+(defun lispbar-modules--init-1 ()
+  "Internal worker for `lispbar-modules-init'."
   (lispbar-modules--log 'info "Initializing Lispbar module system")
   
   ;; Initialize data structures

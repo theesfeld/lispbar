@@ -3,14 +3,17 @@
 EMACS ?= emacs
 BATCH = $(EMACS) -Q --batch
 
-# Source files
-EL_SOURCES = lispbar.el \
+# Source files.  Backend modules MUST be compiled before backends
+# and before lispbar-core, since core requires lispbar-backend at
+# load time.  `lispbar-backend-exwm.el' depends on lispbar-exwm.el.
+EL_SOURCES = lispbar-backend.el \
+	lispbar-backend-wayland.el \
+	lispbar-exwm.el \
+	lispbar-backend-exwm.el \
 	lispbar-core.el \
 	lispbar-modules.el \
-	lispbar-exwm.el \
 	lispbar-render.el \
-	lispbar-theme.el \
-	lispbar-config.el \
+	lispbar.el \
 	$(wildcard modules/*.el)
 
 # Compiled files

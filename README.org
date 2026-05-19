@@ -1,40 +1,48 @@
-#+TITLE: Lispbar - A Pure Elisp Toolbar for EXWM
-#+AUTHOR: Your Name
-#+EMAIL: your.email@example.com
+#+TITLE: Lispbar - A Pure Elisp Status Bar for X11 and Wayland
+#+AUTHOR: Lispbar contributors
 
 * Overview
 
-Lispbar is a pure Emacs Lisp toolbar package designed specifically for EXWM (Emacs X Window Manager) users. It provides a modular, theme-aware, and highly customizable toolbar system with built-in modules for:
+Lispbar is a pure Emacs Lisp status bar that runs on every modern
+graphical Emacs build.  It abstracts the display server behind a
+pluggable backend protocol, so the same configuration works on:
 
-- Battery status monitoring
-- Network connection display
-- Clock and date
-- EXWM workspace management
-- Custom user modules
+- *EXWM* (X11) - workspaces, struts, dock window-type hints
+- *Sway* (Wayland / wlroots) - monitors and workspaces via =swaymsg=
+- *Hyprland* (Wayland) - monitors and workspaces via =hyprctl=
+- *Plain Wayland* (PGTK Emacs, other compositors) - via
+  =display-monitor-attributes-list=
+- *Plain graphical Emacs* on X / NS / GTK as a last-resort fallback
+
+Every Lisp symbol obeys GNU Elisp conventions
+(=lispbar-= public, =lispbar--= private, lexical binding everywhere).
 
 * Features
 
-- *Pure Elisp*: No external dependencies
-- *EXWM Native*: Deep integration with EXWM
-- *Theme Aware*: Automatically adapts to your Emacs theme
-- *Modular Design*: Easy to extend with custom modules
-- *Multi-Monitor Support*: Works across multiple displays
-- *Performance Focused*: Efficient updates and rendering
+- Pure Elisp, no compiled C extensions
+- Pluggable backend protocol (=cl-defgeneric= on EIEIO classes) -
+  users can register new backends without modifying Lispbar
+- Multi-monitor with per-monitor configuration
+- EIEIO module system with priorities, dependencies, caching,
+  inter-module messaging, and lifecycle hooks
+- Beautiful rendering engine with overflow handling, dynamic width
+  and theme-aware faces
 
 * Requirements
 
-- Emacs 27.1 or later
-- EXWM 0.24 or later
+- GNU Emacs 27.1 or later (29.1+ recommended for the PGTK build on
+  Wayland)
+- Optional: =exwm=, =swaymsg=, =hyprctl=
+
+EXWM is *not* a hard dependency; it is loaded automatically only
+when installed.
 
 * Installation
-
-** Manual Installation
-
-Clone the repository and add to your load path:
 
 #+begin_src elisp
 (add-to-list 'load-path "/path/to/lispbar")
 (require 'lispbar)
+(lispbar-mode 1)
 #+end_src
 
 ** Using straight.el
@@ -42,89 +50,96 @@ Clone the repository and add to your load path:
 #+begin_src elisp
 (straight-use-package
  '(lispbar :type git :host github :repo "theesfeld/lispbar"))
+(lispbar-mode 1)
 #+end_src
 
-** Using use-package
+* Wayland Quick Start
+
+Emacs cannot become a layer-shell surface on its own, so on Wayland
+Lispbar relies on the compositor to pin its frame.  Two helpers
+print ready-to-paste rules:
+
+#+begin_src
+M-x lispbar-wayland-print-sway-config       ; Sway / wlroots
+M-x lispbar-wayland-print-hyprland-config   ; Hyprland
+#+end_src
+
+Copy the snippet into =~/.config/sway/config= or
+=~/.config/hypr/hyprland.conf= and reload the compositor.  Then run
+=M-x lispbar-mode=.
+
+* Selecting a Backend
+
+By default Lispbar autoselects the highest-priority backend whose
+=lispbar-backend-available-p= returns non-nil.  Override via:
 
 #+begin_src elisp
-(use-package lispbar
-  :after exwm
-  :config
-  (lispbar-mode 1))
+(setq lispbar-backend-choice 'sway)        ; force Sway backend
+(setq lispbar-backend-choice 'auto)        ; restore autoselection
 #+end_src
+
+** Writing a Custom Backend
+
+#+begin_src elisp
+(defclass my-river-backend (lispbar-backend) ()
+  "Backend for the river Wayland compositor.")
+
+(cl-defmethod lispbar-backend-available-p ((_ my-river-backend))
+  (and (getenv "WAYLAND_DISPLAY")
+       (executable-find "riverctl")))
+
+(cl-defmethod lispbar-backend-detect-monitors ((_ my-river-backend))
+  ...)
+
+(lispbar-backend-register
+ (make-instance 'my-river-backend
+                :name 'river :priority 75
+                :features '(monitor-detect workspaces)))
+#+end_src
+
+That is the entire integration.  Lispbar will now offer =river= in
+=lispbar-backend-choice= and call your methods through
+=cl-defgeneric= dispatch.
 
 * Configuration
 
-** Basic Setup
-
 #+begin_src elisp
 (use-package lispbar
-  :after exwm
   :custom
   (lispbar-position 'top)
   (lispbar-height 28)
-  (lispbar-modules-left '(workspace))
-  (lispbar-modules-center '(clock))
-  (lispbar-modules-right '(network battery))
+  (lispbar-default-modules '(workspace time window-title battery))
   :config
   (lispbar-mode 1))
-#+end_src
-
-** Module Configuration
-
-*** Battery Module
-
-#+begin_src elisp
-(setq lispbar-battery-format "{icon} {percentage}%")
-(setq lispbar-battery-low-threshold 20)
-(setq lispbar-battery-critical-threshold 10)
-#+end_src
-
-*** Clock Module
-
-#+begin_src elisp
-(setq lispbar-clock-format "%H:%M")
-(setq lispbar-clock-show-date t)
-(setq lispbar-clock-date-format "%Y-%m-%d")
-#+end_src
-
-*** Network Module
-
-#+begin_src elisp
-(setq lispbar-network-show-details t)
-(setq lispbar-network-interfaces '("wlan0" "eth0"))
 #+end_src
 
 * Creating Custom Modules
 
+Modules are EIEIO objects.  The shortcut:
+
 #+begin_src elisp
-(lispbar-define-module example
-  :slots ((format :initform "Example: {value}"))
-  :update-fn (format "Value: %s" (random 100)))
-
-(add-to-list 'lispbar-modules-right 'example)
+(lispbar-create-module
+ 'cpu-load
+ (lambda ()
+   (with-temp-buffer
+     (insert-file-contents "/proc/loadavg")
+     (format "Load %s" (car (split-string (buffer-string))))))
+ :position 'right :priority 60 :update-interval 5.0)
 #+end_src
 
-* Development
+* Architecture
 
-** Running Tests
-
-#+begin_src shell
-make test
-#+end_src
-
-** Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests and linting
-5. Submit a pull request
+| File                          | Purpose                                       |
+|-------------------------------|-----------------------------------------------|
+| =lispbar-backend.el=          | Generic protocol (cl-defgeneric + EIEIO)      |
+| =lispbar-backend-wayland.el=  | Sway, Hyprland, generic Wayland backends      |
+| =lispbar-backend-exwm.el=     | X11/EXWM backend (loaded when EXWM present)   |
+| =lispbar-core.el=             | Frames, monitors, struts, hot-plug            |
+| =lispbar-render.el=           | Layout engine                                 |
+| =lispbar-modules.el=          | Module system                                 |
+| =modules/*.el=                | Built-in modules (clock, battery, ...)        |
+| =lispbar.el=                  | Top-level minor mode and user-facing API      |
 
 * License
 
 GPL-3.0-or-later
-
-* Acknowledgments
-
-This project follows GNU Emacs coding conventions and is inspired by various status bar implementations in the Emacs ecosystem.

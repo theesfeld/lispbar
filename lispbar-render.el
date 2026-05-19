@@ -932,10 +932,10 @@ LEFT, CENTER, and RIGHT are content for respective positions."
           ;; Apply responsive width update if enabled
           (lispbar-render--responsive-width-update frame left-str center-str right-str)
           
-          (lispbar-log 'debug "Rendered frame with enhanced layout - content length: %d, sections: %d, used width: %d" 
+          (lispbar-log 'debug "Rendered frame with enhanced layout - content length: %d, sections: %d, used width: %d"
                        (length formatted-content)
                        (length (plist-get layout :sections))
-                       (plist-get layout :total-used-width))))))
+                       (plist-get layout :total-used-width)))))))
 
 (defun lispbar-render--update-frame-throttled (frame left center right)
   "Update FRAME with throttling to prevent excessive updates."
