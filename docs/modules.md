@@ -23,6 +23,7 @@ Two parts:
 | `:media`      | `playerctl` (any MPRIS2)          | center           | 40       | 3.0 s    |
 | `:memory`     | `/proc/meminfo`                   | right            | 55       | 10.0 s   |
 | `:network`    | `nmcli` → `/proc/net/wireless` → `ip` | right        | 75       | 5.0 s    |
+| `:registry`   | (clickable button → fzf picker)   | right            | 5        | 3600.0 s |
 | `:tray`       | StatusNotifierItem (D-Bus)        | right            | 30       | 1.0 s    |
 | `:workspaces` | `swaymsg` / `hyprctl` / `niri msg`| left             | 80       | 0.5 s    |
 
@@ -93,6 +94,18 @@ Two parts:
 * Left-click: NM/iwd GUI.
 * Middle-click: `nmcli radio wifi` (default), override to toggle/etc.
 * Tooltip: SSID + signal + device.
+
+#### `:registry`
+
+* Output: a single glyph (default `📦`).  Set `*registry-label*` to
+  override or `NIL` to hide.
+* Left-click: spawns a terminal running `lispbar registry browse`
+  (the fzf-driven picker — see [registry.md](registry.md)).
+* The terminal is resolved by `*registry-terminal*` (default tries
+  `$TERMINAL`, `foot`, `alacritty`, `kitty`, `wezterm`,
+  `gnome-terminal`, `konsole`, `xterm`).
+* For full control, set `*registry-on-click*` to your own shell
+  command — that takes precedence over the built-in terminal-spawn.
 
 #### `:tray`
 

@@ -11,6 +11,7 @@ in, one item at a time.
 ```sh
 lispbar registry list                     # everything available
 lispbar registry list --kind theme        # just themes
+lispbar registry browse                   # interactive fzf picker
 lispbar registry info :weather            # details for one item
 lispbar registry install :weather         # download + verify + place
 lispbar registry install :tokyo-night     # themes work the same
@@ -20,6 +21,32 @@ lispbar registry update                   # refresh all installed
 
 The leading `:` on the name is optional — `weather` and `:weather`
 both work.
+
+## Interactive browser
+
+`lispbar registry browse` opens an [fzf](https://github.com/junegunn/fzf)
+TUI with:
+
+- The full inventory in the left pane (one item per line, with a
+  `*` marker for items already installed).
+- A live preview on the right showing the output of
+  `lispbar registry info` for the highlighted entry.
+- **Enter** installs (or re-downloads) the highlighted item.
+- **Esc** cancels.
+
+If you don't have `fzf` installed, the command prints a hint and
+exits — fall back to `list` + `install` in that case.
+
+There's also a built-in **`:registry`** module: drop it into a
+placement list and you get a single-glyph button on the bar that
+spawns a terminal running `lispbar registry browse` on left-click.
+The seeded config already places it on the right.  Tunables:
+
+| Variable             | Default                                      |
+|----------------------|----------------------------------------------|
+| `*registry-label*`   | `"📦"` — set to `NIL` to hide the module     |
+| `*registry-terminal*`| Shell expression resolving the terminal cmd  |
+| `*registry-on-click*`| Override the click action entirely           |
 
 ## Where things land
 
