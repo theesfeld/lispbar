@@ -74,6 +74,7 @@ lispbar --show-extensions    # which user files got loaded
 | [docs/configuration.md](docs/configuration.md) | Every config keyword, every per-module variable          |
 | [docs/modules.md](docs/modules.md)         | Built-in module reference + how to write your own         |
 | [docs/themes.md](docs/themes.md)           | Built-in palettes + how to write your own theme           |
+| [docs/registry.md](docs/registry.md)       | Install community modules/themes with `lispbar registry`  |
 | [docs/compositors.md](docs/compositors.md) | Sway / Hyprland / niri setup notes                       |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Common problems and their fixes                  |
 | [docs/architecture.md](docs/architecture.md)| Internals, for contributors                              |
@@ -127,6 +128,27 @@ Themes work the same way:
 
 See [docs/modules.md](docs/modules.md) and
 [docs/themes.md](docs/themes.md) for the full API.
+
+## Community modules and themes
+
+Don't want to write your own?  The repository ships a curated
+**registry** of community modules and themes (`registry/`).  Browse
+and install with the `registry` subcommand:
+
+```sh
+lispbar registry list                  # browse
+lispbar registry install :weather      # download + verify
+lispbar registry install :tokyo-night
+lispbar registry update                # refresh installed items
+```
+
+Items land in `~/.config/lispbar/modules/` (or `themes/`) just like
+hand-written ones.  Submissions go through a PR with CI-enforced
+SHA-256 checks; the moment a PR is merged to `master`, every user's
+`lispbar registry` immediately sees it — no new release required.
+
+See [docs/registry.md](docs/registry.md) and
+[registry/CONTRIBUTING.md](registry/CONTRIBUTING.md).
 
 ## License
 

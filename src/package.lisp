@@ -74,4 +74,10 @@
    #:*tray-icon-size* #:*tray-show-text-when-no-icon* #:*tray-poll-interval*
 
    ;; Output drivers
-   #:run-output #:*current-output*))
+   #:run-output #:*current-output*
+
+   ;; Registry
+   #:*registry-base-url* #:*registry-cache-ttl*
+   #:registry-load #:registry-install #:registry-remove
+   #:registry-update-installed
+   #:do-registry))
