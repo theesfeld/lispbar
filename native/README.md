@@ -78,7 +78,7 @@ Drop the file into the `src/modules/` directory and rebuild.
 | ---------- | -------------------------------------------------- | -------- |
 | `:stdout`  | One bar line per tick to stdout                    | shipping |
 | `:json`    | One waybar-compatible JSON object per tick         | shipping |
-| `:wayland` | Native layer-shell client (cairo + pango via FFI)  | TODO     |
+| `:wayland` | Native `wlr-layer-shell` client (cairo)            | shipping |
 
 The JSON driver lets the binary serve as a custom module for
 **waybar**, **eww**, or **yambar** today:
@@ -92,39 +92,46 @@ The JSON driver lets the binary serve as a custom module for
 }
 ```
 
-## Roadmap to a true standalone bar
+## How the Wayland driver works
 
-`output: :wayland` needs three pieces, none of which exists in CL yet:
+* `cshim/wlbar.c` is a small (~200 line) C glue that handles the parts
+  that *must* be C: the generated wlr-layer-shell marshalling tables,
+  binding the registry globals, allocating a `wl_shm` ARGB32 buffer,
+  and pumping `wl_display_dispatch`.  It exposes a flat ~10-symbol
+  API to the rest of the program.
+* `src/output/wayland.lisp` FFIs into `libwlbar.so` plus `libcairo.so.2`
+  (just 10 functions worth of cairo), gets the raw pixel pointer, and
+  paints the bar with cairo on every tick.
+* Everything user-facing — modules, config, theming, layout — stays in
+  Common Lisp.
 
-1. **FFI to `libwayland-client`.** Generate CFFI bindings against
-   `wayland-client.h`; auto-grovel the protocol with `wayland-scanner`
-   driven from CL.
-2. **`wlr-layer-shell-unstable-v1`.** Codegen from
-   `/usr/share/wayland-protocols/.../wlr-layer-shell-unstable-v1.xml`.
-   Anchor a surface to the top edge with an exclusive zone equal to
-   the bar height.
-3. **Cairo + Pango rendering.** Draw text to a wl_shm buffer; damage
-   the surface on each module update.
-
-When those land, `(output :wayland)` makes the binary the bar.
+That separation is why the binary stays "Lispy" without re-implementing
+the Wayland protocol wire format by hand.
 
 ## Layout
 
 ```
 native/
-├── lispbar.asd           ASDF system
-├── build.lisp            sb-ext:save-lisp-and-die driver
-├── Makefile              make build / install / test
+├── lispbar.asd                ASDF system (depends on cffi)
+├── build.lisp                 sb-ext:save-lisp-and-die driver
+├── Makefile                   make build / install / test
+├── protocols/
+│   └── wlr-layer-shell-unstable-v1.xml
+├── cshim/
+│   ├── wlbar.c                C glue (uses generated marshalling)
+│   ├── wlbar.h                10-symbol FFI surface
+│   └── Makefile               builds libwlbar.so
 ├── src/
-│   ├── package.lisp      Common Lisp package
-│   ├── log.lisp          stderr logger
-│   ├── config.lisp       config DSL loader
-│   ├── module.lisp       defmodule macro + registry
-│   ├── modules/          clock, cpu, memory, battery, audio, bluetooth, brightness
+│   ├── package.lisp           Common Lisp package
+│   ├── log.lisp               stderr logger
+│   ├── config.lisp            config DSL loader
+│   ├── module.lisp            defmodule macro + registry
+│   ├── modules/               clock, cpu, memory, battery, audio,
+│   │                          bluetooth, brightness
 │   ├── output/
-│   │   ├── stdout.lisp   text + JSON drivers
-│   │   └── wayland-stub.lisp     placeholder until FFI lands
-│   └── main.lisp         entry, arg parsing, signal handlers
+│   │   ├── stdout.lisp        text + JSON drivers
+│   │   └── wayland.lisp       layer-shell driver (libwlbar + cairo)
+│   └── main.lisp              entry, arg parsing, signal handlers
 └── examples/config.lisp
 ```
 

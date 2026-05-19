@@ -1,17 +1,28 @@
 ;;;; build.lisp  --  Compile the lispbar ASDF system and save a native binary.
 ;;;;
-;;;; Run with:   sbcl --script build.lisp
-;;;; Result:     ./lispbar  (executable, self-contained)
+;;;; Run with:   make build         (preferred)
+;;;;       or:   sbcl --non-interactive --load build.lisp
+;;;; Result:     ./lispbar  (executable, self-contained except for libwlbar.so)
+
+;;; Pull in Quicklisp so CFFI is available.  Path matches the default
+;;; install layout produced by `quicklisp-quickstart:install'.
+(let ((ql (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname))))
+  (when (probe-file ql) (load ql)))
 
 (require :asdf)
 
-;; Make sure ASDF can find the system in the current directory.
+;; Make sure ASDF can find our system in the current directory.
 (pushnew (truename (make-pathname :directory (pathname-directory
                                               (or *load-truename*
                                                   *compile-file-truename*
                                                   *default-pathname-defaults*))))
          asdf:*central-registry*
          :test #'equal)
+
+;; Quickload CFFI so its FASLs are baked into the image.
+(if (find-package :ql)
+    (funcall (intern "QUICKLOAD" :ql) :cffi :silent t)
+    (asdf:load-system :cffi))
 
 (asdf:load-system :lispbar)
 
@@ -31,8 +42,6 @@
  :executable t
  :purify t
  :compression t
- ;; Stop the SBCL runtime from intercepting --help, --version, etc -
- ;; we want every argument to reach our `main' entry point.
  :save-runtime-options t)
 
 #-sbcl

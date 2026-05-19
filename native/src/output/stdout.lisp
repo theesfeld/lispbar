@@ -105,5 +105,5 @@ priority descending."
     (case kind
       (:stdout  (run-stdout config))
       (:json    (run-stdout config :json t))
-      (:wayland (run-wayland-stub config))
+      (:wayland (run-wayland config))
       (t (error "Unknown output target: ~s" kind)))))

@@ -9,7 +9,7 @@
   :license     "GPL-3.0-or-later"
   :version     "0.1.0"
   :serial      t
-  :depends-on  ()
+  :depends-on  (#:cffi)
   :components ((:module "src"
                 :components
                 ((:file "package")
@@ -26,5 +26,5 @@
                                (:file "brightness")))
                  (:module "output"
                   :components ((:file "stdout")
-                               (:file "wayland-stub")))
+                               (:file "wayland")))
                  (:file "main")))))
