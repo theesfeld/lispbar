@@ -29,10 +29,12 @@
 ;;   :network     - WiFi SSID + signal, Ethernet, VPN
 ;;   :bluetooth   - adapter state and connection count
 ;;   :brightness  - backlight percentage
+;;   :tray        - StatusNotifierItem system tray (D-Bus)
 
 (placement :left   (:launcher :workspaces))
 (placement :center (:media))
-(placement :right  (:cpu :memory :network :audio :bluetooth :brightness :battery :clock))
+(placement :right  (:cpu :memory :network :audio :bluetooth :brightness
+                    :battery :tray :clock))
 
 ;;; ==========================================================
 ;;; 2.  Geometry
@@ -190,3 +192,41 @@
 ;;
 ;;   string | NIL                Built-in default: NIL
 (setf *workspaces-empty-text* nil)
+
+;; ----- :tray -----
+;; The tray module hosts a StatusNotifierItem watcher on the session
+;; D-Bus and shows every registered tray app.  Icons are rendered
+;; from each item's inline pixmap (cairo blit); apps that publish
+;; only an icon name (no pixmap) fall back to text if the flag below
+;; is on.
+;;
+;; Icon size (pixels).  Will be scaled down from the source pixmap.
+;;
+;;   integer                     Built-in default: 16
+(setf *tray-icon-size* 18)
+;;
+;; Fall back to the item Id as text when no pixmap is provided.
+;;
+;;   T | NIL                     Built-in default: T
+(setf *tray-show-text-when-no-icon* t)
+
+;;; ==========================================================
+;;; 7.  Hover tooltips
+;;; ==========================================================
+;;;
+;;; Every module may declare `:tooltip' (a string or a thunk
+;;; returning a string) that's drawn as an overlay above the
+;;; module's pixel range while the pointer hovers over it.  The
+;;; built-in modules already expose useful tooltips - hover the
+;;; clock to see the date, the battery to see time-remaining, etc.
+;;;
+;;; Visual tuning of the tooltip overlay:
+
+;;   (R G B A) doubles 0.0-1.0   Built-in default: (0 0 0 0.85)
+(setf *wayland-tooltip-bg* '(0.10 0.12 0.18 0.92))
+;;   integer (pixels)            Built-in default: 8.0d0
+(setf *wayland-tooltip-padding-x* 10.0d0)
+;;   integer (pixels)            Built-in default: 4.0d0
+(setf *wayland-tooltip-padding-y* 6.0d0)
+;;   integer (pixels)            Built-in default: 6.0d0
+(setf *wayland-tooltip-corner* 8.0d0)

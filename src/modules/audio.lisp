@@ -60,10 +60,20 @@ non-zero exit or missing binary."
   (when (and *audio-on-middle-click* (plusp (length *audio-on-middle-click*)))
     (uiop:launch-program (list "sh" "-c" *audio-on-middle-click*))))
 
+(defun audio-tooltip ()
+  "Long-form audio state for the hover tooltip."
+  (let ((s (or (audio-via-wpctl) (audio-via-pactl))))
+    (cond
+      ((null s) "no audio backend detected")
+      ((getf s :muted) "Audio output muted - click to open mixer")
+      (t (format nil "Volume ~d%   left-click: mixer   middle-click: mute"
+                 (getf s :volume))))))
+
 (defmodule :audio (:doc "Volume + mute state of default sink."
                    :position :right :priority 65 :interval 2.0
                    :on-click ((:left   audio-left-click)
-                              (:middle audio-middle-click)))
+                              (:middle audio-middle-click))
+                   :tooltip  audio-tooltip)
   (let ((s (or (audio-via-wpctl) (audio-via-pactl))))
     (when s
       (if (getf s :muted)

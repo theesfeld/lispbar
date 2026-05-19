@@ -29,10 +29,23 @@
              (plusp (length *bluetooth-on-middle-click*)))
     (uiop:launch-program (list "sh" "-c" *bluetooth-on-middle-click*))))
 
+(defun bluetooth-tooltip ()
+  (cond
+    ((not (executable-find-check "bluetoothctl")) "bluetoothctl not installed")
+    ((not (bt-powered-p)) "Bluetooth off - middle-click to power on")
+    (t (let ((n (bt-connected-count)))
+         (cond
+           ((zerop n) "Bluetooth on - no devices connected")
+           (t (format nil "Bluetooth on - ~d device~:p connected" n)))))))
+
+(defun executable-find-check (name)
+  (and (run-capture "sh" "-c" (format nil "command -v ~a >/dev/null 2>&1 && echo y" name)) t))
+
 (defmodule :bluetooth (:doc "Adapter state and connection count."
                        :position :right :priority 50 :interval 10.0
                        :on-click ((:left   bluetooth-left-click)
-                                  (:middle bluetooth-middle-click)))
+                                  (:middle bluetooth-middle-click))
+                       :tooltip  bluetooth-tooltip)
   (cond ((not (bt-powered-p))
          (list :text "BT off" :face :muted))
         (t

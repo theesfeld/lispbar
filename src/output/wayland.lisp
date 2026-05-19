@@ -104,6 +104,8 @@ cairo_show_text which has no font fallback or shaping."
   (pressed    :int))
 (cffi:defcfun ("wlbar_poll_pointer_event" wlbar-poll-pointer-event) :int
   (out :pointer))
+(cffi:defcfun ("wlbar_pointer_hover"      wlbar-pointer-hover)      :int
+  (output :pointer) (x :pointer) (y :pointer))
 
 ;;; ---------- cairo FFI ----------
 
@@ -137,6 +139,16 @@ cairo_show_text which has no font fallback or shaping."
 (cffi:defcfun ("cairo_arc"                cairo-arc)                :void
   (cr :pointer) (xc :double) (yc :double) (r :double)
   (a1 :double) (a2 :double))
+(cffi:defcfun ("cairo_save"               cairo-save)               :void
+  (cr :pointer))
+(cffi:defcfun ("cairo_restore"            cairo-restore)            :void
+  (cr :pointer))
+(cffi:defcfun ("cairo_translate"          cairo-translate)          :void
+  (cr :pointer) (tx :double) (ty :double))
+(cffi:defcfun ("cairo_scale"              cairo-scale)              :void
+  (cr :pointer) (sx :double) (sy :double))
+(cffi:defcfun ("cairo_set_source_surface" cairo-set-source-surface) :void
+  (cr :pointer) (surf :pointer) (x :double) (y :double))
 
 (defconstant +cairo-operator-clear+  0)
 (defconstant +cairo-operator-source+ 1)
@@ -342,6 +354,105 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
       (pango-draw-fragments cr fragments x baseline-or-top)
       (cairo-draw-fragments cr fragments x baseline-or-top)))
 
+;;; ---- Tray rendering ----
+;;;
+;;; The :tray module returns one synthetic fragment of the form
+;;;   (:tray-placeholder LIST-OF-TRAY-FRAGMENTS)
+;;; Each tray-fragment is either a :pixmap (cairo blit) or a :text
+;;; fallback.  We special-case this in the renderer below so the
+;;; existing flat-fragment pipeline doesn't need to know about
+;;; bitmaps.
+
+(defvar *tray-item-padding* 6.0d0
+  "Pixels between adjacent tray icons / labels.")
+
+(defun fragment-tray-p (f)
+  "Return non-NIL if F is a synthetic tray placeholder fragment."
+  (and (consp f) (eq (first f) :tray-placeholder)))
+
+(defun tray-fragment-pixel-width (cr tray-frags)
+  "Width the tray will consume on this output, given current fonts."
+  (let ((w 0)
+        (first t))
+    (dolist (tf tray-frags)
+      (unless first (incf w *tray-item-padding*))
+      (setf first nil)
+      (case (tray-fragment-kind tf)
+        (:pixmap (incf w *tray-icon-size*))
+        (t       (incf w (if *have-pango*
+                             (let ((lay (pango-cairo-create-layout cr))
+                                   (fd  (pango-fd-from-string *wayland-font-spec*)))
+                               (pango-layout-set-fd lay fd)
+                               (prog1 (pango-text-width lay (tray-fragment-label tf))
+                                 (pango-fd-free fd)
+                                 (g-object-unref lay)))
+                             (cairo-text-width cr (tray-fragment-label tf)))))))
+    w))
+
+(defun blit-pixmap (cr ptr w h dest-x dest-y dest-size)
+  "Blit the ARGB32 buffer at PTR (size W*H) onto CR at (DEST-X DEST-Y),
+scaled to fit DEST-SIZE pixels square."
+  (let* ((stride (* 4 w))
+         (surf   (cairo-isc4d ptr +cairo-format-argb32+ w h stride))
+         (scale  (/ (coerce dest-size 'double-float)
+                    (max (coerce w 'double-float)
+                         (coerce h 'double-float)))))
+    (unwind-protect
+         (progn
+           (cairo-save cr)
+           (cairo-translate cr (coerce dest-x 'double-float)
+                                (coerce dest-y 'double-float))
+           (cairo-scale cr scale scale)
+           (cairo-set-source-surface cr surf 0.0d0 0.0d0)
+           (cairo-paint cr)
+           (cairo-restore cr))
+      (cairo-surface-destroy surf))))
+
+(defun draw-tray-fragments (cr tray-frags x baseline output-idx)
+  "Paint TRAY-FRAGS starting at X, recording each item's bbox in
+*TRAY-FRAGMENT-BBOXES* keyed by OUTPUT-IDX.  Returns the new pen X."
+  (let ((pen   (coerce x 'double-float))
+        (first t))
+    (setf (gethash output-idx *tray-fragment-bboxes*) nil)
+    (dolist (tf tray-frags)
+      (unless first (incf pen *tray-item-padding*))
+      (setf first nil)
+      (let ((start pen))
+        (case (tray-fragment-kind tf)
+          (:pixmap
+           (let* ((h (wlbar-output-height output-idx))
+                  (dest-size *tray-icon-size*)
+                  (dest-y (max 0 (/ (- h dest-size) 2.0d0))))
+             (blit-pixmap cr (tray-fragment-pixmap-pointer tf)
+                          (tray-fragment-pixmap-w tf)
+                          (tray-fragment-pixmap-h tf)
+                          pen dest-y dest-size)
+             (incf pen dest-size)))
+          (t
+           (apply #'cairo-set-source-rgba cr (rgba->doubles (theme-color :normal)))
+           (cond
+             (*have-pango*
+              (let ((lay (pango-cairo-create-layout cr))
+                    (fd  (pango-fd-from-string *wayland-font-spec*)))
+                (unwind-protect
+                     (progn
+                       (pango-layout-set-fd lay fd)
+                       (pango-layout-set-text lay (tray-fragment-label tf) -1)
+                       (cairo-move-to cr pen baseline)
+                       (pango-cairo-show-layout cr lay)
+                       (incf pen (pango-text-width lay (tray-fragment-label tf))))
+                  (pango-fd-free fd)
+                  (g-object-unref lay))))
+             (t
+              (cairo-move-to cr pen baseline)
+              (cairo-show-text cr (tray-fragment-label tf))
+              (incf pen (cairo-text-width cr (tray-fragment-label tf)))))))
+        (push (list tf start pen)
+              (gethash output-idx *tray-fragment-bboxes*))))
+    (setf (gethash output-idx *tray-fragment-bboxes*)
+          (nreverse (gethash output-idx *tray-fragment-bboxes*)))
+    pen))
+
 ;;; ---- Per-module bounding boxes (for click hit-testing) ----
 
 (defvar *module-bboxes* (make-hash-table :test 'eql)
@@ -364,17 +475,28 @@ the latest geometry.")
 
 ;;; ---- Render: lay out modules, painting per-module so bboxes line up ----
 
+(defun module-pixel-width (cr m)
+  "Width that module M's fragments will paint to.  Special-cases
+the synthetic :tray-placeholder fragment so the tray reserves
+real icon pixels rather than text width."
+  (let* ((v     (module-output m))
+         (frags (module-output-fragments v)))
+    (cond
+      ((null frags) 0)
+      ((and (= 1 (length frags)) (fragment-tray-p (first frags)))
+       (tray-fragment-pixel-width cr (second (first frags))))
+      (t (fragment-list-width cr frags)))))
+
 (defun module-section-width (cr modules)
   "Sum the painted width of MODULES + inter-module gaps."
   (let ((total 0)
         (first t))
     (dolist (m modules)
-      (let* ((v     (module-output m))
-             (frags (module-output-fragments v)))
-        (when frags
+      (let ((w (module-pixel-width cr m)))
+        (when (plusp w)
           (unless first (incf total *wayland-module-gap*))
           (setf first nil)
-          (incf total (fragment-list-width cr frags)))))
+          (incf total w))))
     total))
 
 (defun draw-section (cr modules start-x baseline output-idx)
@@ -388,8 +510,15 @@ the latest geometry.")
           (unless first (incf pen *wayland-module-gap*))
           (setf first nil)
           (let ((mod-start pen))
-            (draw-fragments cr frags pen baseline)
-            (incf pen (fragment-list-width cr frags))
+            (cond
+              ;; Tray special case: pixmap blits + per-item bboxes.
+              ((and (= 1 (length frags)) (fragment-tray-p (first frags)))
+               (let ((tray-frags (second (first frags))))
+                 (setf pen (draw-tray-fragments cr tray-frags pen
+                                                  baseline output-idx))))
+              (t
+               (draw-fragments cr frags pen baseline)
+               (incf pen (fragment-list-width cr frags))))
             (record-bbox output-idx m mod-start pen)))))
     pen))
 
@@ -423,7 +552,9 @@ the latest geometry.")
                                (/ (- w cw) 2.0d0) ypos i))
                (let ((rw (module-section-width cr right-modules)))
                  (draw-section cr right-modules
-                               (- w rw pad) ypos i))))
+                               (- w rw pad) ypos i)))
+             ;; Tooltip overlay (after everything else; on top).
+             (draw-tooltip-overlay cr i w h))
         (cairo-destroy cr)
         (cairo-surface-destroy surf)))
     (wlbar-output-commit i)
@@ -433,6 +564,104 @@ the latest geometry.")
   "Paint every output's surface."
   (loop for i from 0 below (wlbar-output-count)
         do (render-output i instances)))
+
+;;; ---- Tooltips ----
+;;;
+;;; When the pointer is currently inside one of our surfaces and is
+;;; over a module that exposes a `:tooltip', we draw the tooltip
+;;; text as an overlay floating above the hovered module's bbox.
+;;; The overlay is painted inside the bar surface itself (we
+;;; don't open a separate popup surface), so the bar's vertical
+;;; space must accommodate it.  *wayland-tooltip-height* reserves
+;;; that space; the rest of the bar shrinks to fit.
+
+(defvar *wayland-tooltip-bg* '(0.0 0.0 0.0 0.85)
+  "RGBA fill behind tooltip text.")
+
+(defvar *wayland-tooltip-padding-x* 8.0d0)
+(defvar *wayland-tooltip-padding-y* 4.0d0)
+(defvar *wayland-tooltip-corner*    6.0d0
+  "Tooltip background corner radius (pixels).  0 = sharp.")
+
+(defun current-hover ()
+  "Return (OUTPUT X) when the pointer is over one of our surfaces,
+or NIL."
+  (cffi:with-foreign-objects ((o :int) (x :double) (y :double))
+    (when (eql 1 (wlbar-pointer-hover o x y))
+      (list (cffi:mem-ref o :int) (cffi:mem-ref x :double)))))
+
+(defun hovered-module (output-idx x)
+  "Return the module under the cursor on OUTPUT-IDX at X."
+  (module-at-x output-idx x))
+
+(defun paint-tooltip (cr text bbox-start bbox-end bar-w bar-h)
+  "Paint TEXT as an overlay over the bar.
+The tooltip's horizontal position centres above BBOX-START..BBOX-END
+but is clamped inside the bar.  Vertical position is just above the
+bottom edge of the bar."
+  (when (or (null text) (zerop (length text))) (return-from paint-tooltip))
+  ;; Measure text.
+  (let* ((text-w (if *have-pango*
+                     (let ((lay (pango-cairo-create-layout cr))
+                           (fd  (pango-fd-from-string *wayland-font-spec*)))
+                       (pango-layout-set-fd lay fd)
+                       (prog1 (pango-text-width lay text)
+                         (pango-fd-free fd)
+                         (g-object-unref lay)))
+                     (cairo-text-width cr text)))
+         (box-w (+ text-w (* 2 *wayland-tooltip-padding-x*)))
+         (box-h (+ *wayland-font-size* (* 2 *wayland-tooltip-padding-y*)))
+         (centre (/ (+ bbox-start bbox-end) 2.0d0))
+         (box-x (max 4.0d0 (min (- bar-w box-w 4.0d0)
+                                (- centre (/ box-w 2.0d0)))))
+         (box-y (max 0.0d0 (- bar-h box-h 2.0d0))))
+    (cairo-save cr)
+    ;; Background
+    (apply #'cairo-set-source-rgba cr (rgba->doubles *wayland-tooltip-bg*))
+    (cond
+      ((plusp *wayland-tooltip-corner*)
+       (rounded-rect-path cr box-x box-y box-w box-h *wayland-tooltip-corner*)
+       (cairo-fill cr))
+      (t
+       (cairo-rectangle cr box-x box-y box-w box-h)
+       (cairo-fill cr)))
+    ;; Text
+    (apply #'cairo-set-source-rgba cr (rgba->doubles (theme-color :normal)))
+    (let ((tx (+ box-x *wayland-tooltip-padding-x*))
+          (ty (if *have-pango*
+                  (+ box-y *wayland-tooltip-padding-y*)
+                  (+ box-y *wayland-tooltip-padding-y* *wayland-font-size*))))
+      (cond
+        (*have-pango*
+         (let ((lay (pango-cairo-create-layout cr))
+               (fd  (pango-fd-from-string *wayland-font-spec*)))
+           (unwind-protect
+                (progn (pango-layout-set-fd lay fd)
+                       (pango-layout-set-text lay text -1)
+                       (cairo-move-to cr tx ty)
+                       (pango-cairo-show-layout cr lay))
+             (pango-fd-free fd)
+             (g-object-unref lay))))
+        (t
+         (cairo-move-to cr tx ty)
+         (cairo-show-text cr text))))
+    (cairo-restore cr)))
+
+(defun draw-tooltip-overlay (cr output-idx bar-w bar-h)
+  "If the pointer is hovering a module on OUTPUT-IDX and that module
+has a tooltip, paint it as an overlay on the bar."
+  (let ((hover (current-hover)))
+    (when (and hover (= (first hover) output-idx))
+      (let* ((x (round (second hover)))
+             (m (hovered-module output-idx x)))
+        (when m
+          (let ((text (resolve-tooltip m)))
+            (when (and text (plusp (length text)))
+              (let ((bbox (find-if (lambda (b) (eq (first b) m))
+                                    (gethash output-idx *module-bboxes*))))
+                (when bbox
+                  (paint-tooltip cr text (second bbox) (third bbox)
+                                 bar-w bar-h))))))))))
 
 ;;; ---- Click event drain ----
 
@@ -449,7 +678,7 @@ the latest geometry.")
                     (button-key (button->key button))
                     (module     (module-at-x output-idx x)))
                (when module
-                 (dispatch-module-click module button-key output-idx))))))
+                 (dispatch-module-click module button-key output-idx x))))))
 
 ;;; ---------- Main loop ----------
 

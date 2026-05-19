@@ -65,7 +65,8 @@ shim:
 build: shim lispbar
 
 lispbar: $(wildcard src/*.lisp src/modules/*.lisp src/output/*.lisp) \
-         examples/config.lisp lispbar.asd build.lisp cshim/libwlbar.so
+         examples/config.lisp lispbar.asd build.lisp \
+         cshim/libwlbar.so cshim/libwltray.so
 	@# Drop the cached FASL for src/config.lisp so the `#.' that
 	@# reads examples/config.lisp at compile time runs again.
 	@find ~/.cache/common-lisp -path '*lispbar/src/config.*' \
@@ -112,7 +113,8 @@ install-bin: build
 	install -Dm755 lispbar           $(BIN_DIR)/lispbar
 
 install-lib: build
-	install -Dm755 cshim/libwlbar.so $(LIB_DIR)/libwlbar.so
+	install -Dm755 cshim/libwlbar.so  $(LIB_DIR)/libwlbar.so
+	install -Dm755 cshim/libwltray.so $(LIB_DIR)/libwltray.so
 
 install-share:
 	install -Dm644 examples/config.lisp \
@@ -151,7 +153,7 @@ uninstall-bin:
 	rm -f $(BIN_DIR)/lispbar
 
 uninstall-lib:
-	rm -f $(LIB_DIR)/libwlbar.so
+	rm -f $(LIB_DIR)/libwlbar.so $(LIB_DIR)/libwltray.so
 	-rmdir $(LIB_DIR) 2>/dev/null || true
 
 uninstall-share:

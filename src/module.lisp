@@ -17,6 +17,9 @@
    ;;   - a function              called with (MODULE BUTTON OUTPUT-INDEX)
    ;;   - NIL                     do nothing
    (on-click  :initarg :on-click  :accessor module-on-click :initform nil)
+   ;; Tooltip can be a string (static), a function of no args
+   ;; returning a string, or NIL (no tooltip).
+   (tooltip   :initarg :tooltip   :accessor module-tooltip  :initform nil)
    (state     :initform nil       :accessor module-state)
    (last-output :initform nil     :accessor module-last-output)
    (last-run  :initform 0         :accessor module-last-run))
@@ -52,7 +55,7 @@ Replaces any previous registration with the same NAME."
     (funcall (getf entry :factory))))
 
 (defmacro defmodule (name (&key doc (position :right) (priority 50)
-                                  (interval 5.0) on-click)
+                                  (interval 5.0) on-click tooltip)
                      &body body)
   ;; Treat `on-click' as data: it's a plist of keyword -> action,
   ;; where each action is either a string (shell command), a symbol
@@ -89,7 +92,8 @@ Example:
                                                   :position ,position
                                                   :priority ,priority
                                                   :interval ,interval
-                                                  :on-click ',on-click)))
+                                                  :on-click ',on-click
+                                                  :tooltip  ',tooltip)))
        ,name)))
 
 (defun module-output (module)
@@ -145,7 +149,31 @@ A simple string yields one fragment with :normal face; a (:text X
   "Return MODULE's current display string, or NIL if it has no output."
   (module-output-text (module-output module)))
 
+(defun resolve-tooltip (module)
+  "Return MODULE's tooltip text right now, or NIL.
+A tooltip may be a string, a function of no args, or a symbol naming
+a function.  Handler errors are swallowed; tooltip just goes blank."
+  (let ((spec (module-tooltip module)))
+    (handler-case
+        (cond
+          ((null spec) nil)
+          ((stringp spec) spec)
+          ((functionp spec) (funcall spec))
+          ((and (symbolp spec) (fboundp spec))
+           (funcall (symbol-function spec)))
+          (t nil))
+      (error () nil))))
+
 ;;; ---- Click dispatch ----
+
+(defvar *click-x* 0
+  "Surface-x of the click currently being dispatched.  Bound around
+calls to module on-click handlers so they can pinpoint sub-fragments
+inside a wider module (e.g. the :tray pulls the specific tray item
+under the cursor from this).")
+
+(defvar *click-output* 0
+  "Output index of the click currently being dispatched.")
 
 (defun button->key (button)
   "Map a Linux input-event-codes.h button number to a keyword."
@@ -198,10 +226,12 @@ value form (which is treated as the :left action)."
       (logmsg :warn "module ~a click handler failed: ~a"
               (module-name module) e))))
 
-(defun dispatch-module-click (module button output-index)
-  "Invoke MODULE's action for BUTTON, if any."
+(defun dispatch-module-click (module button output-index &optional (x 0))
+  "Invoke MODULE's action for BUTTON.  X is the surface-x of the click."
   (let ((action (module-action module button)))
     (when action
-      (logmsg :debug "click ~a on ~a (output ~d)"
-              button (module-name module) output-index)
-      (run-module-action action module button output-index))))
+      (logmsg :debug "click ~a on ~a (output ~d, x ~a)"
+              button (module-name module) output-index x)
+      (let ((*click-x* x)
+            (*click-output* output-index))
+        (run-module-action action module button output-index)))))

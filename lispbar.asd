@@ -29,7 +29,8 @@
                                (:file "workspaces")
                                (:file "media")
                                (:file "network")
-                               (:file "launcher")))
+                               (:file "launcher")
+                               (:file "tray")))
                  (:module "output"
                   :components ((:file "stdout")
                                (:file "wayland")))
