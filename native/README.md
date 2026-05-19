@@ -44,7 +44,8 @@ The bar is anchored to the top edge of every output via
 
 ### Configuration
 
-`~/.config/lispbar/config.lisp` is a Lisp file evaluated by the
+`$XDG_CONFIG_HOME/lispbar/config.lisp` (defaulting to
+`~/.config/lispbar/config.lisp`) is a Lisp file evaluated by the
 binary on startup.  Every form is one of:
 
 ```lisp
@@ -52,7 +53,7 @@ binary on startup.  Every form is one of:
 (placement :center (:media))
 (placement :right  (:cpu :memory :audio :bluetooth :brightness :battery :clock))
 
-(theme    :nordish)             ; or :gruvboxish :catppuccinish :doomish :minimal
+(theme    :nordish)             ; or any registered theme
 (font     "Sans Bold 11")       ; Pango font description
 (height   28)                   ; bar height in pixels
 (tick     1.0)                  ; refresh interval in seconds
@@ -61,8 +62,116 @@ binary on startup.  Every form is one of:
 ```
 
 Forms are evaluated top-to-bottom; later forms override earlier ones.
+The config file may also contain ordinary Lisp forms - `defmodule`,
+`define-theme`, `setf` - so you can keep your whole setup in one
+place if you prefer.
 
-## Modules
+### XDG search path
+
+Lispbar is fully XDG-compliant.  The binary searches, in order:
+
+| What         | Path                                                                  |
+| ------------ | --------------------------------------------------------------------- |
+| Config file  | `$XDG_CONFIG_HOME/lispbar/config.lisp`                                |
+| Config dirs  | every `$XDG_CONFIG_DIRS/.../lispbar/config.lisp`                      |
+| User modules | `$XDG_CONFIG_HOME/lispbar/modules/*.lisp`                             |
+| User themes  | `$XDG_CONFIG_HOME/lispbar/themes/*.lisp`                              |
+| System dirs  | every `$XDG_CONFIG_DIRS/.../lispbar/{modules,themes}/*.lisp`          |
+| Data dirs    | `$XDG_DATA_HOME/lispbar/{modules,themes}/*.lisp`, then `$XDG_DATA_DIRS` |
+| State        | `$XDG_STATE_HOME/lispbar/` (for module bookkeeping)                   |
+| Cache        | `$XDG_CACHE_HOME/lispbar/` (for module caches)                        |
+
+Inspect the live resolution with `lispbar --print-paths` and
+`lispbar --show-extensions`.
+
+## Writing your own module
+
+Drop a file under `$XDG_CONFIG_HOME/lispbar/modules/`:
+
+```lisp
+;; ~/.config/lispbar/modules/loadavg.lisp
+(in-package :lispbar)
+
+(defmodule :loadavg
+  (:doc "5- and 15-minute load average."
+   :position :right :priority 58 :interval 5.0)
+  (when (probe-file "/proc/loadavg")
+    (with-open-file (s "/proc/loadavg" :direction :input)
+      (let* ((line (read-line s nil ""))
+             (parts (uiop:split-string line :separator '(#\Space))))
+        (when (>= (length parts) 3)
+          (list :text (format nil "LOAD ~a ~a"
+                              (second parts) (third parts))
+                :face :muted))))))
+```
+
+Then reference `:loadavg` in `config.lisp`:
+
+```lisp
+(placement :right (:loadavg :cpu :memory :battery :clock))
+```
+
+Restart lispbar; the new module appears.  No rebuild needed - user
+extensions are loaded as source `.lisp` files at startup.
+
+### Module API
+
+`defmodule NAME (&key doc position priority interval) BODY...`
+registers a factory.  Every tick the body is evaluated; its value
+becomes the module's display content.  The return value is one of:
+
+| Return                                  | Meaning                                |
+| --------------------------------------- | -------------------------------------- |
+| `NIL` or `""`                           | Module hidden this tick.               |
+| `"a string"`                            | One fragment, `:normal` face.          |
+| `(:text "X" :face :urgent)`             | One fragment, custom face.             |
+| `(:fragments (("X" :muted) ("2" :accent)))` | Multiple fragments with per-fragment faces. |
+
+Available faces: `:normal :accent :ok :warn :urgent :muted`
+(`:bg` is the bar background).
+
+Helpers exported for module authors:
+
+| Symbol                       | What                                                    |
+| ---------------------------- | ------------------------------------------------------- |
+| `run-capture PROGRAM &rest`  | Run a process, return stdout string on exit 0, NIL else |
+| `logmsg LEVEL FMT &rest`     | Structured stderr log                                   |
+| `lispbar-state-directory`    | `$XDG_STATE_HOME/lispbar/`, created on first use         |
+| `lispbar-cache-directory`    | `$XDG_CACHE_HOME/lispbar/`, created on first use         |
+
+## Writing your own theme
+
+Drop a file under `$XDG_CONFIG_HOME/lispbar/themes/`:
+
+```lisp
+;; ~/.config/lispbar/themes/dracula.lisp
+(in-package :lispbar)
+
+(define-theme :dracula
+  :bg     '(0.157 0.165 0.212 1.0)
+  :normal '(0.945 0.945 0.945 1.0)
+  :accent '(0.741 0.576 0.976 1.0)
+  :ok     '(0.314 0.980 0.482 1.0)
+  :warn   '(0.945 0.980 0.549 1.0)
+  :urgent '(1.000 0.333 0.333 1.0)
+  :muted  '(0.380 0.420 0.490 1.0))
+```
+
+Reference it from `config.lisp`:
+
+```lisp
+(theme :dracula)
+```
+
+Colours are `(R G B A)` doubles in 0.0-1.0.  Every face listed in
+the `Module API` section is recognised; omitted faces fall back to
+the active theme's `:normal`.
+
+Built-in themes you can copy as a starting point:
+`:default`, `:minimal`, `:nordish`, `:gruvboxish`, `:catppuccinish`,
+`:doomish`.
+
+## Built-in modules
 
 | Name           | Source                       |
 | -------------- | ---------------------------- |
@@ -76,36 +185,8 @@ Forms are evaluated top-to-bottom; later forms override earlier ones.
 | `:bluetooth`   | `bluetoothctl`               |
 | `:brightness`  | `brightnessctl` → sysfs      |
 
-Add your own:
-
-```lisp
-(defmodule :weather (:doc "Open-Meteo current conditions"
-                     :position :right :priority 35 :interval 600.0)
-  (run-capture "curl" "-s" "wttr.in/?format=3"))
-```
-
-Drop the file in `src/modules/`, add it to `lispbar.asd`, rebuild.
-
-### Module faces
-
-A module's update function returns one of:
-
-```lisp
-"plain text"                              ; → :normal face
-(:text "BAT -5%" :face :urgent)           ; one fragment, urgent
-(:fragments (("[" :muted)                 ; many fragments, each
-             ("2" :accent)                ; with its own face
-             ("]" :muted)))
-```
-
-Available faces: `:normal :accent :ok :warn :urgent :muted` (plus
-`:bg` for the bar background).  Every shipped theme defines the full
-palette, so themes work uniformly across modules.
-
-## Themes
-
-Built-in: `:adaptive` (default), `:minimal`, `:nordish`,
-`:gruvboxish`, `:catppuccinish`, `:doomish`.
+`lispbar --list-modules` prints the live inventory (built-ins plus
+anything discovered under XDG).
 
 ## Output drivers
 

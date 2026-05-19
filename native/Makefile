@@ -20,13 +20,17 @@ install: build
 	install -Dm755 cshim/libwlbar.so $(DESTDIR)$(PREFIX)/lib/lispbar/libwlbar.so
 	install -Dm644 examples/config.lisp \
 	  $(DESTDIR)$(PREFIX)/share/lispbar/example-config.lisp
+	install -Dm644 examples/modules/loadavg.lisp \
+	  $(DESTDIR)$(PREFIX)/share/lispbar/examples/modules/loadavg.lisp
+	install -Dm644 examples/themes/dracula.lisp \
+	  $(DESTDIR)$(PREFIX)/share/lispbar/examples/themes/dracula.lisp
 	install -Dm644 systemd/lispbar.service \
 	  $(DESTDIR)$(PREFIX)/lib/systemd/user/lispbar.service
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/lispbar
 	rm -f $(DESTDIR)$(PREFIX)/lib/lispbar/libwlbar.so
-	rm -f $(DESTDIR)$(PREFIX)/share/lispbar/example-config.lisp
+	rm -rf $(DESTDIR)$(PREFIX)/share/lispbar
 	rm -f $(DESTDIR)$(PREFIX)/lib/systemd/user/lispbar.service
 
 run: build

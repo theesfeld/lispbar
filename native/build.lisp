@@ -36,6 +36,9 @@
              (handler-case
                  (uiop:quit (or (lispbar:main) 0))
                (sb-sys:interactive-interrupt () (uiop:quit 130))
+               ;; SIGPIPE from `lispbar … | head`: silent, exit 0.
+               #+sbcl (sb-int:simple-stream-error () (uiop:quit 0))
+               #+sbcl (sb-int:broken-pipe () (uiop:quit 0))
                (error (c)
                  (format *error-output* "lispbar: fatal: ~a~%" c)
                  (uiop:quit 1))))
