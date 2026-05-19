@@ -1,0 +1,168 @@
+.\" lispbar.conf(5) - lispbar configuration file format
+.TH LISPBAR.CONF 5 "May 2026" "lispbar" "File Formats"
+.SH NAME
+lispbar.conf \- configuration file format for lispbar
+.SH SYNOPSIS
+.I $XDG_CONFIG_HOME/lispbar/config.lisp
+.SH DESCRIPTION
+The lispbar configuration file is a Common Lisp source file
+evaluated in the
+.B :lispbar
+package, top to bottom, on startup.  Forms appear roughly in
+sections matching the seeded default:
+.IP \(bu 2
+modules and placement,
+.IP \(bu 2
+geometry (position, height, margin, padding, gap, corner radius),
+.IP \(bu 2
+typography (font),
+.IP \(bu 2
+colour theme,
+.IP \(bu 2
+runtime behaviour (tick, output, log level),
+.IP \(bu 2
+per-module options
+.RB ( setf
+on exposed variables),
+.IP \(bu 2
+tooltip visuals,
+.IP \(bu 2
+custom-module click handlers.
+.PP
+The seeded default lives at
+.I @PREFIX@/share/lispbar/examples/config.lisp
+and is copied to
+.I $XDG_CONFIG_HOME/lispbar/config.lisp
+on first run.
+.SH RECOGNISED TOP-LEVEL FORMS
+.SS Placement
+.EX
+(placement :left   (\fIMODULE-NAMES\fR))
+(placement :center (\fIMODULE-NAMES\fR))
+(placement :right  (\fIMODULE-NAMES\fR))
+.EE
+Each list is the set of modules visible in that section.  Order
+within the visible bar is by module priority (higher = further left).
+.SS Geometry
+.EX
+(position :top|:bottom)        ; default :top
+(height \fIN\fR)                       ; default 28
+(margin \fIN\fR ...)                   ; CSS-style 1\(en4 values
+(padding \fIN\fR)                      ; default 12
+(gap \fIN\fR)                          ; default 12
+(corner-radius \fIN\fR)                ; default 0 (sharp)
+.EE
+.SS Typography
+.EX
+(font \fI"PANGO DESCRIPTION"\fR)       ; e.g. "Sans 11"
+.EE
+.SS Theme
+.EX
+(theme \fI:NAME\fR)                    ; default :default
+.EE
+Built-in names:
+.BR :default ", " :minimal ", " :nordish ", " :gruvboxish ", " :catppuccinish ", " :doomish .
+.SS Runtime
+.EX
+(tick \fIS\fR)                         ; main-loop interval (s)
+(output :wayland|:stdout|:json)
+(log-level :debug|:info|:warn|:error)
+.EE
+.SS Per-module options
+The remainder of the file is ordinary Lisp.  Tune any exposed
+defvar with
+.BR setf .
+For example:
+.EX
+(setf *clock-format*       :hh-mm-ss)
+(setf *workspaces-scope*   :current-output)
+(setf *audio-on-click*     "pavucontrol")
+(setf *audio-scroll-step*  5)
+.EE
+See
+.BR lispbar-modules (7)
+for the full list per module.
+.SH MARGIN GRAMMAR
+.EX
+(margin 8)              ; 8 px every side
+(margin 8 16)           ; vertical / horizontal
+(margin 8 16 0)         ; top / horizontal / bottom
+(margin 8 16 4 16)      ; top / right / bottom / left
+.EE
+.SH FRAGMENT API (for module return values)
+Modules return one of:
+.IP \(bu 2
+.B nil
+or empty string \(em module is hidden this tick.
+.IP \(bu 2
+.IR string " \(em"
+one fragment in
+.B :normal
+face.
+.IP \(bu 2
+.BI "(:text """ TEXT """ :face " FACE ")"
+\(em one fragment, custom face.
+.IP \(bu 2
+.BI "(:fragments (" FRAGMENT-LIST "))"
+\(em multiple fragments.
+.PP
+Each fragment in the list takes one of these shapes:
+.EX
+("plain text" \fI:face\fR)
+(:gap \fIPIXELS-OR-NIL\fR)
+(:clickable :text \fI"X"\fR :face \fI:accent\fR
+            :on-click \fIHANDLER\fR :data \fIDATA\fR)
+.EE
+The
+.B :clickable
+fragment has its bounding box recorded per-output and clicks
+inside it dispatch to its own handler before falling through to
+the module-level
+.BR :on-click .
+.SH CLICK HANDLER VALUES
+.B :on-click
+is a property list mapping button keywords to handler values.
+.PP
+Button keys:
+.BR :left ", " :right ", " :middle ", " :side ", " :extra ", " :scroll-up ", " :scroll-down .
+.PP
+Handler value can be any of:
+.TP
+.I nil
+no-op
+.TP
+.IR """string"""
+shell command, run via
+.BR "sh -c" .
+.TP
+.IR (""argv1"" " " ""argv2"" " " ...)
+argv list, run directly.
+.TP
+.I symbol
+named function, called with
+.IB ( MODULE
+.IB BUTTON
+.IB OUTPUT-IDX )\fR.
+.TP
+.IB # ' function
+same arity as symbol form.
+.SH EXAMPLE
+Minimal config:
+.EX
+;; ~/.config/lispbar/config.lisp
+(placement :left  (:workspaces))
+(placement :right (:cpu :memory :audio :network :battery :clock))
+
+(theme         :catppuccinish)
+(font          "Sans 11")
+(margin        8 12 0 12)
+(corner-radius 12)
+(output        :wayland)
+.EE
+.SH SEE ALSO
+.BR lispbar (1),
+.BR lispbar-modules (7),
+.BR lispbar-themes (7).
+.PP
+Full reference:
+.IR @PREFIX@/share/doc/lispbar/configuration.md .

@@ -1,0 +1,172 @@
+.\" lispbar(1) - native Wayland status bar in Common Lisp
+.TH LISPBAR 1 "May 2026" "lispbar" "User Commands"
+.SH NAME
+lispbar \- native Wayland status bar in Common Lisp
+.SH SYNOPSIS
+.B lispbar
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B lispbar
+is a status bar for Wayland compositors that speak the
+.I wlr-layer-shell-unstable-v1
+protocol (Sway, Hyprland, niri, river, Wayfire, KDE Plasma Wayland,
+and other wlroots-based compositors).  Configuration is a Lisp
+file, modules and themes are Lisp files; the bar is a single
+native binary produced by SBCL.
+.PP
+On first launch lispbar creates
+.IR $XDG_CONFIG_HOME/lispbar/ ,
+seeds a default
+.IR config.lisp ,
+and starts rendering.  Every option is documented inline in the
+seeded file.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIPATH\fR
+Use
+.I PATH
+instead of the XDG-discovered config file.
+.TP
+.BR \-o ", " \-\-output " " \fIKIND\fR
+Override the
+.B (output)
+config form for this invocation.
+.I KIND
+is one of
+.BR stdout ", " json ", or " wayland .
+.TP
+.B \-\-once
+Render one frame and exit.  Useful in pipelines and scripts.
+.TP
+.B \-\-init
+Seed
+.IR $XDG_CONFIG_HOME/lispbar/config.lisp ,
+.IR modules/ ,
+and
+.IR themes/
+explicitly.  Refuses if the config already exists; combine with
+.B \-\-force
+to overwrite.
+.TP
+.B \-\-force
+Used with
+.B \-\-init
+to overwrite an existing config.
+.TP
+.B \-\-no\-seed
+Skip the automatic first-run seeding (equivalent to setting
+.B LISPBAR_NO_SEED
+in the environment).
+.TP
+.B \-\-list\-modules
+Print every registered module (built-ins + user extensions) and
+exit.
+.TP
+.B \-\-list\-themes
+Print every registered theme and exit.
+.TP
+.B \-\-show\-extensions
+Print which user
+.I .lisp
+files were loaded from the XDG search path and exit.
+.TP
+.B \-\-print\-paths
+Print the resolved XDG paths and exit.
+.TP
+.BR \-v ", " \-\-verbose
+Enable
+.B :debug
+log level.
+.TP
+.BR \-h ", " \-\-help
+Print short usage and exit.
+.SH ENVIRONMENT
+.TP
+.B WAYLAND_DISPLAY
+Wayland socket name (standard).
+.TP
+.B XDG_CONFIG_HOME
+Defaults to
+.IR ~/.config .
+The bar looks at
+.IR $XDG_CONFIG_HOME/lispbar/config.lisp
+first.
+.TP
+.B XDG_CONFIG_DIRS
+Colon-separated list of fallback config roots.  Defaults to
+.IR /etc/xdg .
+.TP
+.B XDG_DATA_HOME
+Defaults to
+.IR ~/.local/share .
+Searched for additional module and theme files.
+.TP
+.B XDG_DATA_DIRS
+Defaults to
+.IR /usr/local/share:/usr/share .
+Searched for additional module and theme files.
+.TP
+.B XDG_STATE_HOME
+Per-user state directory.  Modules may write under
+.IR $XDG_STATE_HOME/lispbar/ .
+.TP
+.B XDG_CACHE_HOME
+Per-user cache directory.  Tray icon PNGs are cached under
+.IR $XDG_CACHE_HOME/lispbar/icons/ .
+.TP
+.B SWAYSOCK ", " HYPRLAND_INSTANCE_SIGNATURE ", " NIRI_SOCKET
+Compositor IPC sockets.  The
+.B :workspaces
+module uses whichever it finds.
+.TP
+.B LISPBAR_NO_SEED
+When set non-empty, suppresses first-run seeding of
+.IR $XDG_CONFIG_HOME/lispbar/ .
+.SH FILES
+.TP
+.IR $XDG_CONFIG_HOME/lispbar/config.lisp
+Main configuration file.  See
+.BR lispbar.conf (5).
+.TP
+.IR $XDG_CONFIG_HOME/lispbar/modules/*.lisp
+User-defined modules.  See
+.BR lispbar-modules (7).
+.TP
+.IR $XDG_CONFIG_HOME/lispbar/themes/*.lisp
+User-defined themes.  See
+.BR lispbar-themes (7).
+.TP
+.IR $XDG_CACHE_HOME/lispbar/icons/
+SVG-to-PNG conversion cache for tray icons.  Safe to delete.
+.TP
+.I @PREFIX@/share/lispbar/examples/
+Example user config and example user module/theme files.
+.TP
+.I @PREFIX@/share/doc/lispbar/
+Full markdown documentation set.
+.SH SIGNALS
+.TP
+.B SIGINT ", " SIGTERM
+Clean shutdown.  All layer surfaces are destroyed and the D-Bus
+connection released before the process exits.
+.SH EXIT STATUS
+.TP
+0
+Normal exit.
+.TP
+130
+Interrupted by signal (SIGINT / SIGTERM).
+.TP
+1
+Fatal error during startup or main loop.
+.SH SEE ALSO
+.BR lispbar.conf (5),
+.BR lispbar-modules (7),
+.BR lispbar-themes (7).
+.PP
+Full markdown documentation:
+.IR @PREFIX@/share/doc/lispbar/index.md .
+.SH AUTHORS
+Lispbar contributors.
+.SH LICENSE
+GPL-3.0-or-later.
