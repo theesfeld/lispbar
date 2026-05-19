@@ -103,27 +103,102 @@ That is the entire integration.  Lispbar will now offer =river= in
 
 * Configuration
 
+** Placement: left / center / right
+
+Each module is anchored to one of three regions of every Lispbar
+frame.  Set the lists below to choose what appears and where:
+
 #+begin_src elisp
 (use-package lispbar
   :custom
   (lispbar-position 'top)
   (lispbar-height 28)
-  (lispbar-default-modules '(workspace time window-title battery))
+  (lispbar-modules-left   '(workspace))
+  (lispbar-modules-center '(mpris window-title))
+  (lispbar-modules-right  '(cpu memory audio bluetooth battery clock tray))
+  (lispbar-current-theme  'nordish)
   :config
   (lispbar-mode 1))
 #+end_src
 
+Each entry can be a plain symbol or =(NAME :priority N :update-interval S)=
+to override factory defaults.  Order within a list is preserved
+(leftmost-first / rightmost-last).
+
+** Built-in Modules
+
+| Name          | Description                                              | Requires                 |
+|---------------+----------------------------------------------------------+--------------------------|
+| =clock=       | Customisable time + date.                                | -                        |
+| =time=        | Tiny =HH:MM:SS= clock (no date).                         | -                        |
+| =workspace=   | Active workspace, driven by backend (EXWM/Sway/Hyprland).| backend support          |
+| =window-title=| Title of focused window.                                 | backend support          |
+| =battery=     | Cross-platform battery (Linux/macOS/Windows).            | =battery.el=             |
+| =network=     | Interface state with SSID / IP.                          | =ip= / =iw= / native     |
+| =cpu=         | 1-minute load average.                                   | =/proc/loadavg=          |
+| =memory=      | Used-RAM percent.                                        | =/proc/meminfo=          |
+| =audio=       | Volume + mute, with click helpers.                       | =wpctl= / =pactl= / =amixer= |
+| =bluetooth=   | Adapter + connected-device count.                        | =bluetoothctl=           |
+| =brightness=  | Backlight percent.                                       | =brightnessctl= / sysfs  |
+| =mpris=       | Now-playing artist / title.                              | session D-Bus            |
+| =tray=        | StatusNotifierItem (SNI) text tray.                      | session D-Bus            |
+
+List every registered module at runtime with =(lispbar-module-names)=.
+
+** Themes
+
+Lispbar ships with several themes and one =adaptive= theme that
+inherits from your current Emacs theme:
+
+| Theme            | Style                                            |
+|------------------+--------------------------------------------------|
+| =adaptive=       | Inherits =mode-line=, =success=, etc. (default)  |
+| =minimal=        | Monochrome, no bold / colour highlights          |
+| =nordish=        | Cool blue Nord-style palette                     |
+| =gruvboxish=     | Warm Gruvbox-style palette                       |
+| =catppuccinish=  | Pastel Catppuccin Mocha style                    |
+| =doomish=        | Dark, high-contrast doom-one style               |
+
+#+begin_src elisp
+(setq lispbar-current-theme 'gruvboxish)
+(lispbar-theme-apply)            ;; or M-x lispbar-theme-apply
+#+end_src
+
+Define your own with:
+
+#+begin_src elisp
+(lispbar-define-theme 'my-theme
+  "Brand-coloured theme."
+  '((lispbar-face         ((t :foreground "#cccccc" :background "#0a0a0a")))
+    (lispbar-active-face  ((t :foreground "#ffaa00" :weight bold)))
+    (lispbar-urgent-face  ((t :foreground "#ff3333")))))
+(setq lispbar-current-theme 'my-theme)
+#+end_src
+
 * Creating Custom Modules
 
-Modules are EIEIO objects.  The shortcut:
+Modules are EIEIO objects.  The declarative way:
+
+#+begin_src elisp
+(lispbar-defmodule mail
+  "Unread mail count from mu."
+  :update-interval 30
+  :position 'right :priority 55
+  :update-fn (lambda ()
+               (with-temp-buffer
+                 (call-process "mu" nil t nil "find" "flag:unread" "-c")
+                 (format "Mail %s" (string-trim (buffer-string))))))
+#+end_src
+
+That single form registers the factory; the user then adds =mail= to
+=lispbar-modules-right= (or any of the placement lists) to enable it.
+
+For a one-shot lambda, the runtime API:
 
 #+begin_src elisp
 (lispbar-create-module
  'cpu-load
- (lambda ()
-   (with-temp-buffer
-     (insert-file-contents "/proc/loadavg")
-     (format "Load %s" (car (split-string (buffer-string))))))
+ (lambda () ...)
  :position 'right :priority 60 :update-interval 5.0)
 #+end_src
 

@@ -817,5 +817,74 @@ This method should be overridden by specific module implementations."
   
   (lispbar-modules--log 'info "Module system cleanup complete"))
 
+;;; Declarative Module Registry
+;;
+;; Every built-in module - and any user-defined module - registers a
+;; constructor here.  `lispbar-default-modules' is a list of names that
+;; the top-level mode looks up to instantiate modules.
+
+(defvar lispbar-module-factories nil
+  "Alist of (NAME . PLIST) describing every registered module factory.
+Each PLIST has at least:
+  :doc        Human-readable description.
+  :factory    A zero-arity function returning a `lispbar-module' instance.
+Additional keys may be used by tooling.")
+
+(defun lispbar-register-module (name &rest plist)
+  "Register module NAME with PLIST keys (`:doc' and `:factory').
+Replaces any previous registration with the same NAME.  Returns NAME."
+  (cl-check-type name symbol)
+  (unless (functionp (plist-get plist :factory))
+    (error "lispbar-register-module: :factory must be a function (got %S)"
+           (plist-get plist :factory)))
+  (let ((cell (assq name lispbar-module-factories)))
+    (if cell (setcdr cell plist)
+      (push (cons name plist) lispbar-module-factories)))
+  name)
+
+(defun lispbar-unregister-module (name)
+  "Remove module factory NAME from the registry."
+  (setq lispbar-module-factories
+        (assq-delete-all name lispbar-module-factories)))
+
+(defun lispbar-module-names ()
+  "Return the list of all registered module names."
+  (mapcar #'car lispbar-module-factories))
+
+(defun lispbar-make-module (name)
+  "Instantiate a fresh module from the factory registered as NAME.
+Returns the `lispbar-module' instance, or signals an error if no
+factory is registered for NAME."
+  (let ((plist (cdr (assq name lispbar-module-factories))))
+    (unless plist
+      (error "No Lispbar module factory registered for `%s'" name))
+    (funcall (plist-get plist :factory))))
+
+(cl-defmacro lispbar-defmodule (name docstring &rest plist)
+  "Declare and register a Lispbar module called NAME.
+DOCSTRING is a short description shown to users.
+PLIST accepts every keyword `make-instance' of `lispbar-module'
+accepts (`:update-fn', `:position', `:priority', `:update-interval',
+`:hooks', `:communicates', `:cache-timeout', ...).
+
+Example:
+
+  (lispbar-defmodule cpu \"CPU load.\"
+    :position \\='right :priority 60 :update-interval 5.0
+    :update-fn #\\='my-cpu-update)
+
+The macro registers a factory that creates a fresh `lispbar-module'
+instance every time `lispbar-make-module' is called for NAME."
+  (declare (indent defun) (doc-string 2))
+  (let ((sym (intern (format "lispbar-module-factory--%s" name))))
+    `(progn
+       (defun ,sym ()
+         ,(format "Factory for the `%s' Lispbar module." name)
+         (make-instance 'lispbar-module :name ',name ,@plist))
+       (lispbar-register-module ',name
+                                :doc ,docstring
+                                :factory #',sym)
+       ',name)))
+
 (provide 'lispbar-modules)
 ;;; lispbar-modules.el ends here

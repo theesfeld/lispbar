@@ -392,19 +392,19 @@ Uses caching to improve performance."
       (condition-case err
           (let ((monitors (lispbar--perform-monitor-detection)))
             (lispbar--log 'info "Detected %d monitors" (length monitors))
-            
+
             ;; Cache the results
             (lispbar--cache-monitors monitors)
-            
+
             ;; Identify primary monitor
             (lispbar--identify-primary-monitor monitors)
-            
+
             ;; Add persistent identifiers
             (mapcar #'lispbar--add-monitor-identifier monitors))
-        
+
         (error
          (lispbar--log 'error "Monitor detection failed: %s" err)
-         (list (lispbar--create-fallback-monitor)))))
+         (list (lispbar--create-fallback-monitor)))))))
 
 (defun lispbar--perform-monitor-detection ()
   "Perform actual monitor detection based on configured method."
@@ -1919,12 +1919,12 @@ Returns t if valid, nil if issues detected."
   (lispbar--log 'info "Migrating content from %d affected frames" (length affected-frames))
   
   ;; Find target monitor (prefer primary, fall back to first available)
-  (let ((target-monitor (or (cl-find-if (lambda (m) (plist-get m :primary)) lispbar--monitors)
-                           (car lispbar--monitors))))
-        (target-frame-info (cl-find-if (lambda (fi) 
-                                        (equal (plist-get fi :monitor)
-                                              (plist-get target-monitor :id)))
-                                      lispbar--frames)))
+  (let* ((target-monitor (or (cl-find-if (lambda (m) (plist-get m :primary)) lispbar--monitors)
+                             (car lispbar--monitors)))
+         (target-frame-info (cl-find-if (lambda (fi)
+                                          (equal (plist-get fi :monitor)
+                                                 (plist-get target-monitor :id)))
+                                        lispbar--frames)))
     
     (when (and target-monitor target-frame-info)
       ;; For now, simply ensure the target frame exists
@@ -2202,7 +2202,7 @@ This function removes all frames, cleans up monitoring, and runs cleanup functio
         lispbar--configuration-backup nil
         lispbar--initialized nil)
   
-  (lispbar--log 'info "Enhanced Lispbar cleanup complete")))
+  (lispbar--log 'info "Enhanced Lispbar cleanup complete"))
 
 ;;;###autoload
 (defun lispbar-refresh ()

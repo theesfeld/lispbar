@@ -62,9 +62,9 @@ Available placeholders:
   {power}       - Power consumption/input (if available)
 
 Example formats:
-  \="{icon} {percentage}%\=" - Simple icon and percentage
-  \="{icon} {percentage}% ({time})\=" - Include time remaining
-  \="Battery: {percentage}% {status}\=" - Verbose format"
+  \"{icon} {percentage}%\"            - Simple icon and percentage
+  \"{icon} {percentage}% ({time})\"   - Include time remaining
+  \"Battery: {percentage}% {status}\" - Verbose format"
   :type 'string
   :group 'lispbar-battery)
 
@@ -841,6 +841,14 @@ Called during module system shutdown."
 ;; Register cleanup function
 (eval-after-load 'lispbar-modules
   '(lispbar--add-cleanup-function #'lispbar-battery--cleanup))
+
+;;; Registration
+
+(when (fboundp 'lispbar-battery--create-module)
+  (lispbar-register-module
+   'battery
+   :doc "Cross-platform battery status (Linux, macOS, Windows)."
+   :factory #'lispbar-battery--create-module))
 
 ;;; Provide
 

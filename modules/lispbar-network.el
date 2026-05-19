@@ -971,6 +971,14 @@ Called during module system shutdown."
 (eval-after-load 'lispbar-modules
   '(lispbar--add-cleanup-function #'lispbar-network--cleanup))
 
+;;; Registration
+
+(when (fboundp 'lispbar-network--create-module)
+  (lispbar-register-module
+   'network
+   :doc "Network interface status with SSID / IP / signal strength."
+   :factory #'lispbar-network--create-module))
+
 ;;; Provide
 
 (provide 'lispbar-network)

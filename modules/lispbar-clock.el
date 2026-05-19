@@ -417,6 +417,14 @@ Called during module system shutdown."
 (eval-after-load 'lispbar-modules
   '(lispbar--add-cleanup-function #'lispbar-clock--cleanup))
 
+;;; Registration
+
+(when (fboundp 'lispbar-clock--create-module)
+  (lispbar-register-module
+   'clock
+   :doc "Customisable clock and date display."
+   :factory #'lispbar-clock--create-module))
+
 ;;; Provide
 
 (provide 'lispbar-clock)

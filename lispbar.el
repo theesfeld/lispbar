@@ -62,12 +62,23 @@
 (require 'lispbar-core)
 (require 'lispbar-render)
 (require 'lispbar-modules)
+(require 'lispbar-theme)
 
 ;; Load EXWM and its backend only if EXWM itself is present.  This
 ;; keeps Lispbar usable on Wayland or plain X without EXWM installed.
 (when (locate-library "exwm")
   (require 'lispbar-exwm nil t)
   (require 'lispbar-backend-exwm nil t))
+
+;; Make every built-in module available for selection.  Loading a
+;; module file only registers its factory; nothing runs until the
+;; user puts the module's name in one of the placement lists below
+;; (or in `lispbar-default-modules').
+(dolist (sym '(lispbar-clock lispbar-workspace lispbar-battery
+               lispbar-network lispbar-cpu lispbar-memory
+               lispbar-audio lispbar-bluetooth lispbar-brightness
+               lispbar-mpris lispbar-tray))
+  (require sym nil t))
 
 ;;; Customization
 
@@ -84,15 +95,31 @@ When non-nil, a basic set of modules will be created and enabled automatically."
   :type 'boolean
   :group 'lispbar)
 
-(defcustom lispbar-default-modules '(time workspace window-title)
-  "List of default modules to enable when `lispbar-auto-start-modules' is t.
-Each element should be a symbol representing a module type."
-  :type '(repeat (choice (const :tag "Current time" time)
-                         (const :tag "Workspace indicator" workspace)
-                         (const :tag "Window title" window-title)
-                         (const :tag "Battery status" battery)
-                         (const :tag "System load" system-load)
-                         (symbol :tag "Custom module")))
+(defcustom lispbar-modules-left '(workspace)
+  "Modules anchored to the LEFT of every Lispbar frame.
+Each element is the symbolic name of a registered module
+factory (see `lispbar-module-names').  Order in this list is the
+order they appear, leftmost first."
+  :type '(repeat symbol)
+  :group 'lispbar)
+
+(defcustom lispbar-modules-center '(window-title)
+  "Modules anchored in the CENTER of every Lispbar frame."
+  :type '(repeat symbol)
+  :group 'lispbar)
+
+(defcustom lispbar-modules-right '(audio battery clock)
+  "Modules anchored to the RIGHT of every Lispbar frame.
+Rightmost item is the last entry of the list."
+  :type '(repeat symbol)
+  :group 'lispbar)
+
+(defcustom lispbar-default-modules nil
+  "Legacy flat list of modules to enable on startup.
+If non-nil, overrides the per-position lists.  Each module
+is placed at its factory-declared `:position'.  Prefer the
+`lispbar-modules-left' / `-center' / `-right' options."
+  :type '(repeat symbol)
   :group 'lispbar)
 
 (defcustom lispbar-startup-hook nil
@@ -158,10 +185,15 @@ These modules will be cleaned up when lispbar-mode is disabled.")
   (make-instance 'lispbar-module
                  :name 'time
                  :update-fn (lambda ()
-                              (format-time-string "%H:%M:%S"))
+                              (propertize (format-time-string "%H:%M:%S")
+                                          'face 'lispbar-clock-face))
                  :update-interval 1.0
                  :position 'right
                  :priority 90))
+
+(lispbar-register-module
+ 'time :doc "Simple HH:MM:SS clock."
+ :factory #'lispbar--create-time-module)
 
 (defun lispbar--create-workspace-module ()
   "Create a workspace indicator module driven by the active backend."
@@ -181,6 +213,11 @@ These modules will be cleaned up when lispbar-mode is disabled.")
                  :position 'left
                  :priority 80))
 
+(lispbar-register-module
+ 'workspace
+ :doc "Workspace indicator (uses the active display backend)."
+ :factory #'lispbar--create-workspace-module)
+
 (defun lispbar--create-window-title-module ()
   "Create a window title display module driven by the active backend."
   (make-instance 'lispbar-module
@@ -195,57 +232,58 @@ These modules will be cleaned up when lispbar-mode is disabled.")
                  :priority 50
                  :cache-timeout 5.0))
 
+(lispbar-register-module
+ 'window-title :doc "Title of the focused window."
+ :factory #'lispbar--create-window-title-module)
+
 (defun lispbar--create-battery-module ()
-  "Create a battery status module."
+  "Create a battery status module using the built-in battery.el."
   (make-instance 'lispbar-module
                  :name 'battery
                  :update-fn (lambda ()
                               (when (fboundp 'battery-format)
                                 (let ((status (funcall battery-status-function)))
                                   (when status
-                                    (battery-format "%p%% %L" status)))))
+                                    (propertize
+                                     (battery-format "%p%% %L" status)
+                                     'face 'lispbar-battery-face)))))
                  :update-interval 60.0
                  :position 'right
                  :priority 70))
 
-(defun lispbar--create-system-load-module ()
-  "Create a system load module."
-  (make-instance 'lispbar-module
-                 :name 'system-load
-                 :update-fn (lambda ()
-                              (when (file-exists-p "/proc/loadavg")
-                                (with-temp-buffer
-                                  (insert-file-contents "/proc/loadavg")
-                                  (let ((load (car (split-string (buffer-string)))))
-                                    (format "Load: %s" load)))))
-                 :update-interval 5.0
-                 :position 'right
-                 :priority 60))
+;; Only register the simple fallback battery if the richer
+;; lispbar-battery module isn't loaded.
+(unless (assq 'battery lispbar-module-factories)
+  (lispbar-register-module
+   'battery :doc "Battery status via the built-in battery.el."
+   :factory #'lispbar--create-battery-module))
 
 ;;; Module Factory
 
-(defun lispbar--create-default-module (module-type)
-  "Create a default module of MODULE-TYPE.
-Returns the created module instance or nil if type is unknown."
+(defun lispbar--create-default-module (module-type &optional position)
+  "Create a module of MODULE-TYPE via the factory registry.
+When POSITION is non-nil, override the factory's `:position'
+slot so the user's placement list wins.  Returns the module
+instance or nil if no factory is registered for MODULE-TYPE."
   (run-hook-with-args 'lispbar-before-module-create-hook module-type)
-  
-  (let ((module
+
+  (let ((effective-type
+         ;; Backwards-compatible aliases used by older configurations.
          (cl-case module-type
-           (time (lispbar--create-time-module))
-           (workspace (lispbar--create-workspace-module))
-           (window-title (lispbar--create-window-title-module))
-           (battery (lispbar--create-battery-module))
-           (system-load (lispbar--create-system-load-module))
-           (t (progn
-                (lispbar-log 'warning "Unknown default module type: %s" module-type)
-                nil)))))
-    
-    (when module
-      (run-hook-with-args 'lispbar-after-module-create-hook module)
-      (push module lispbar--created-modules)
-      (lispbar-log 'info "Created default module: %s" module-type))
-    
-    module))
+           (system-load 'cpu)
+           (t module-type))))
+    (let ((module (and (assq effective-type lispbar-module-factories)
+                       (lispbar-make-module effective-type))))
+      (when (and module position)
+        (oset module position position))
+      (when module
+        (run-hook-with-args 'lispbar-after-module-create-hook module)
+        (push module lispbar--created-modules)
+        (lispbar-log 'info "Created default module: %s (position %s)"
+                     module-type (and module (oref module position))))
+      (unless module
+        (lispbar-log 'warning "Unknown module type: %s" module-type))
+      module)))
 
 ;;; Configuration Validation
 
@@ -261,14 +299,19 @@ Returns a list of configuration issues or nil if valid."
                                               (format "Core: %s" issue))
                                             core-issues)))))
     
-    ;; Validate default modules list
-    (unless (listp lispbar-default-modules)
-      (push "lispbar-default-modules must be a list" issues))
-    
-    ;; Validate module types
-    (dolist (module-type lispbar-default-modules)
-      (unless (symbolp module-type)
-        (push (format "Invalid module type (not a symbol): %S" module-type) issues)))
+    ;; Validate module placement lists.
+    (dolist (sym '(lispbar-default-modules
+                   lispbar-modules-left
+                   lispbar-modules-center
+                   lispbar-modules-right))
+      (let ((value (symbol-value sym)))
+        (unless (listp value)
+          (push (format "%s must be a list" sym) issues))
+        (dolist (entry value)
+          (let ((name (if (consp entry) (car entry) entry)))
+            (unless (symbolp name)
+              (push (format "%s contains a non-symbol entry: %S" sym entry)
+                    issues))))))
     
     ;; Validate hooks
     (dolist (hook '(lispbar-startup-hook lispbar-shutdown-hook
@@ -328,21 +371,47 @@ Returns t on success, nil on failure."
      (push err lispbar--initialization-errors)
      nil)))
 
-(defun lispbar--create-default-modules ()
-  "Create and register default modules if auto-start is enabled."
-  (when lispbar-auto-start-modules
-    (lispbar-log 'info "Creating default modules: %S" lispbar-default-modules)
-    
-    (dolist (module-type lispbar-default-modules)
+(defun lispbar--instantiate-list (specs position)
+  "Instantiate every module symbol in SPECS at POSITION.
+SPECS is a list of either symbols (NAME) or (NAME . PLIST) cells.
+PLIST entries may override factory defaults, e.g. (:priority 70).
+When POSITION is nil the factory's declared position is kept."
+  (dolist (spec specs)
+    (let* ((name (if (consp spec) (car spec) spec))
+           (overrides (and (consp spec) (cdr spec))))
       (condition-case err
-          (let ((module (lispbar--create-default-module module-type)))
+          (let ((module (lispbar--create-default-module name position)))
             (when module
+              (when (plist-member overrides :priority)
+                (oset module priority (plist-get overrides :priority)))
+              (when (plist-member overrides :update-interval)
+                (oset module update-interval
+                      (plist-get overrides :update-interval)))
               (lispbar-modules-register module)
-              (lispbar-log 'debug "Registered default module: %s" module-type)))
+              (lispbar-log 'debug "Registered module %s at %s" name
+                           (or position "factory-default"))))
         (error
-         (lispbar-log 'error "Failed to create module %s: %s" module-type err)
-         (push err lispbar--initialization-errors))))
-    
+         (lispbar-log 'error "Failed to create module %s: %s" name err)
+         (push err lispbar--initialization-errors))))))
+
+(defun lispbar--create-default-modules ()
+  "Create and register default modules if auto-start is enabled.
+Reads `lispbar-modules-left', `-center', and `-right' to decide
+both which modules to create and where to place them.  Falls back
+to the legacy flat `lispbar-default-modules' list if it is set."
+  (when lispbar-auto-start-modules
+    (cond
+     (lispbar-default-modules
+      (lispbar-log 'info "Creating default modules (legacy): %S"
+                   lispbar-default-modules)
+      (lispbar--instantiate-list lispbar-default-modules nil))
+     (t
+      (lispbar-log 'info "Creating modules - left:%S center:%S right:%S"
+                   lispbar-modules-left lispbar-modules-center
+                   lispbar-modules-right)
+      (lispbar--instantiate-list lispbar-modules-left   'left)
+      (lispbar--instantiate-list lispbar-modules-center 'center)
+      (lispbar--instantiate-list lispbar-modules-right  'right)))
     (lispbar-log 'info "Default module creation complete")))
 
 (defun lispbar--cleanup-created-modules ()

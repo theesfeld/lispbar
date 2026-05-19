@@ -584,6 +584,14 @@ Called during module system shutdown."
 (eval-after-load 'lispbar-modules
   '(lispbar--add-cleanup-function #'lispbar-workspace--cleanup))
 
+;;; Registration
+
+(when (fboundp 'lispbar-workspace--create-module)
+  (lispbar-register-module
+   'workspace
+   :doc "Workspace indicator driven by the active backend."
+   :factory #'lispbar-workspace--create-module))
+
 ;;; Provide
 
 (provide 'lispbar-workspace)
