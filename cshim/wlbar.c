@@ -490,6 +490,14 @@ int wlbar_poll_pointer_event(struct wlbar_pointer_event *out) {
     return 1;
 }
 
+int wlbar_pointer_hover(int *output_idx, double *x, double *y) {
+    if (g_pointer_output < 0) return 0;
+    if (output_idx) *output_idx = g_pointer_output;
+    if (x)          *x          = g_pointer_x;
+    if (y)          *y          = g_pointer_y;
+    return 1;
+}
+
 int       wlbar_output_count (void) { return g_output_count; }
 
 int       wlbar_output_width   (int i) {

@@ -89,6 +89,12 @@ struct wlbar_pointer_event {
  * dropped (consumers care about clicks, not motion). */
 int   wlbar_poll_pointer_event(struct wlbar_pointer_event *out);
 
+/* Current hover state.  Returns 1 and fills OUTPUT_IDX + X + Y when
+ * the pointer is currently inside one of our surfaces.  Returns 0
+ * when the pointer is elsewhere or no pointer exists.  Useful for
+ * driving tooltip overlays. */
+int   wlbar_pointer_hover(int *output_idx, double *x, double *y);
+
 #ifdef __cplusplus
 }
 #endif

@@ -61,7 +61,15 @@
 
    ;; Click dispatch (for users writing their own modules)
    #:module-on-click #:dispatch-module-click #:run-module-action
-   #:button->key
+   #:button->key #:*click-x* #:*click-output*
+
+   ;; Tooltips
+   #:module-tooltip #:resolve-tooltip
+   #:*wayland-tooltip-bg* #:*wayland-tooltip-padding-x*
+   #:*wayland-tooltip-padding-y* #:*wayland-tooltip-corner*
+
+   ;; Tray
+   #:*tray-icon-size* #:*tray-show-text-when-no-icon* #:*tray-poll-interval*
 
    ;; Output drivers
    #:run-output #:*current-output*))

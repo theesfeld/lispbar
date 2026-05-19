@@ -161,10 +161,24 @@ to the common NetworkManager / iwd GUIs.  NIL to disable.")
   (when (and *network-on-click* (plusp (length *network-on-click*)))
     (uiop:launch-program (list "sh" "-c" *network-on-click*))))
 
+(defun network-tooltip ()
+  "Detailed network state for the hover tooltip."
+  (let ((conn (network--nmcli-active-connection)))
+    (cond
+      ((null conn) "No active connection - click to open network manager")
+      (t (destructuring-bind (type name device) conn
+           (let ((sig (and (or (string= type "wifi")
+                                (string= type "802-11-wireless"))
+                            (network--nmcli-wifi-signal device))))
+             (cond
+               (sig (format nil "WiFi: ~a   ~d% on ~a" (first sig) (second sig) device))
+               (t   (format nil "~a (~a)" name device)))))))))
+
 (defmodule :network
   (:doc "Active network connection (WiFi SSID + signal, Ethernet, VPN)."
    :position :right :priority 75 :interval 5.0
-   :on-click ((:left network-left-click)))
+   :on-click ((:left network-left-click))
+   :tooltip  network-tooltip)
   (or (network-via-nmcli)
       (network-via-proc)
       (network-via-ip)
