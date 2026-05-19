@@ -29,17 +29,38 @@
   (:unix (:or "libcairo.so.2" "libcairo.so"))
   (t (:default "libcairo")))
 
-(defvar *wlbar-loaded* nil)
-(defvar *cairo-loaded* nil)
+(cffi:define-foreign-library libpangocairo
+  (:unix (:or "libpangocairo-1.0.so.0" "libpangocairo-1.0.so"))
+  (t (:default "libpangocairo-1.0")))
+
+(cffi:define-foreign-library libpango
+  (:unix (:or "libpango-1.0.so.0" "libpango-1.0.so"))
+  (t (:default "libpango-1.0")))
+
+(defvar *wlbar-loaded*    nil)
+(defvar *cairo-loaded*    nil)
+(defvar *pango-loaded*    nil)
+(defvar *have-pango*      nil
+  "Set when libpangocairo loaded; gates the high-quality text path.")
 
 (defun ensure-wayland-libs ()
-  "Load libwlbar.so and libcairo.  Returns T on success, NIL on failure."
+  "Load libwlbar.so, libcairo, and (if available) libpango/pangocairo.
+Returns T on success.  Pango is optional; without it we fall back to
+cairo_show_text which has no font fallback or shaping."
   (handler-case
       (progn
         (unless *wlbar-loaded*
           (cffi:use-foreign-library libwlbar) (setf *wlbar-loaded* t))
         (unless *cairo-loaded*
           (cffi:use-foreign-library libcairo) (setf *cairo-loaded* t))
+        (unless *pango-loaded*
+          (handler-case
+              (progn (cffi:use-foreign-library libpango)
+                     (cffi:use-foreign-library libpangocairo)
+                     (setf *pango-loaded* t *have-pango* t))
+            (error (c)
+              (logmsg :warn "pango unavailable, using cairo toy text: ~a" c)
+              (setf *pango-loaded* t *have-pango* nil))))
         t)
     (error (c)
       (logmsg :error "cannot load Wayland support: ~a" c)
@@ -99,6 +120,35 @@
     (cairo-text-extents cr text ext)
     (cffi:foreign-slot-value ext '(:struct cairo-text-extents) 'x-advance)))
 
+;;; ---------- Pango FFI (optional path) ----------
+
+(defvar *pango-scale* 1024
+  "PANGO_SCALE - pango sizes are in 1024ths of a pixel.")
+
+(cffi:defcfun ("pango_cairo_create_layout"  pango-cairo-create-layout)  :pointer
+  (cr :pointer))
+(cffi:defcfun ("pango_cairo_show_layout"    pango-cairo-show-layout)    :void
+  (cr :pointer) (layout :pointer))
+(cffi:defcfun ("pango_font_description_from_string" pango-fd-from-string) :pointer
+  (str :string))
+(cffi:defcfun ("pango_font_description_free" pango-fd-free) :void
+  (fd :pointer))
+(cffi:defcfun ("pango_layout_set_font_description" pango-layout-set-fd) :void
+  (layout :pointer) (fd :pointer))
+(cffi:defcfun ("pango_layout_set_text"      pango-layout-set-text)      :void
+  (layout :pointer) (text :string) (len :int))
+(cffi:defcfun ("pango_layout_get_pixel_size" pango-layout-get-pixel-size) :void
+  (layout :pointer) (w :pointer) (h :pointer))
+(cffi:defcfun ("g_object_unref"             g-object-unref)             :void
+  (obj :pointer))
+
+(defun pango-text-width (layout text)
+  "Set TEXT on LAYOUT and return its width in pixels."
+  (pango-layout-set-text layout text -1)
+  (cffi:with-foreign-objects ((w :int) (h :int))
+    (pango-layout-get-pixel-size layout w h)
+    (cffi:mem-ref w :int)))
+
 ;;; ---------- Theme palette ----------
 ;;;
 ;;; A theme is a plist mapping face keywords to (R G B A) doubles.
@@ -111,6 +161,8 @@
   "Plist of face -> colour for the active theme.")
 (defvar *wayland-font-family* "monospace")
 (defvar *wayland-font-size*   13.0d0)
+(defvar *wayland-font-spec*   "Monospace 11"
+  "Pango font description string used by the high-quality text path.")
 
 (defun theme-color (face)
   "Return the (R G B A) colour for FACE in the active theme."
@@ -175,25 +227,66 @@
 
 (defun rgba->doubles (c) (mapcar (lambda (v) (coerce v 'double-float)) c))
 
-(defun fragment-list-width (cr fragments)
-  "Total pixel width of FRAGMENTS, painted back-to-back."
-  (loop for (text _face) in fragments
-        sum (cairo-text-width cr text)))
+;; Cairo (toy) path -----------------------------------------------
 
-(defun draw-fragments (cr fragments x baseline)
-  "Paint FRAGMENTS back-to-back starting at X / BASELINE.
-Each fragment carries its own face; spacing is up to the caller (the
-module-fragments helper already inserts space fragments)."
+(defun cairo-fragment-list-width (cr fragments)
+  (loop for (text _) in fragments sum (cairo-text-width cr text)))
+
+(defun cairo-draw-fragments (cr fragments x baseline)
   (let ((pen (coerce x 'double-float)))
     (dolist (f fragments)
-      (let ((text (first f))
-            (face (second f)))
+      (let ((text (first f)) (face (second f)))
         (apply #'cairo-set-source-rgba cr
                (rgba->doubles (theme-color face)))
         (cairo-move-to cr pen baseline)
         (cairo-show-text cr text)
         (incf pen (cairo-text-width cr text))))
     pen))
+
+;; Pango path -----------------------------------------------------
+
+(defun pango-fragment-list-width (cr fragments)
+  (let ((layout (pango-cairo-create-layout cr))
+        (fd     (pango-fd-from-string *wayland-font-spec*)))
+    (unwind-protect
+         (progn (pango-layout-set-fd layout fd)
+                (loop for (text _) in fragments
+                      sum (pango-text-width layout text)))
+      (pango-fd-free fd)
+      (g-object-unref layout))))
+
+(defun pango-draw-fragments (cr fragments x y-top)
+  (let ((layout (pango-cairo-create-layout cr))
+        (fd     (pango-fd-from-string *wayland-font-spec*))
+        (pen    (coerce x 'double-float)))
+    (unwind-protect
+         (progn (pango-layout-set-fd layout fd)
+                (dolist (f fragments)
+                  (let ((text (first f)) (face (second f)))
+                    (apply #'cairo-set-source-rgba cr
+                           (rgba->doubles (theme-color face)))
+                    (cairo-move-to cr pen y-top)
+                    (pango-layout-set-text layout text -1)
+                    (pango-cairo-show-layout cr layout)
+                    (incf pen (pango-text-width layout text)))))
+      (pango-fd-free fd)
+      (g-object-unref layout))
+    pen))
+
+;; Dispatch -------------------------------------------------------
+
+(defun fragment-list-width (cr fragments)
+  (if *have-pango*
+      (pango-fragment-list-width cr fragments)
+      (cairo-fragment-list-width cr fragments)))
+
+(defun draw-fragments (cr fragments x baseline-or-top)
+  "Paint FRAGMENTS at horizontal position X.
+BASELINE-OR-TOP is the cairo baseline when *have-pango* is NIL, and
+the layout top-edge otherwise (pango positions glyphs from the top)."
+  (if *have-pango*
+      (pango-draw-fragments cr fragments x baseline-or-top)
+      (cairo-draw-fragments cr fragments x baseline-or-top)))
 
 (defun render-output (i instances)
   "Paint output index I.  Returns NIL when the output is unmapped."
@@ -210,8 +303,9 @@ module-fragments helper already inserts space fragments)."
              (apply #'cairo-set-source-rgba cr
                     (rgba->doubles (theme-color :bg)))
              (cairo-paint cr)
-             (cairo-select-font-face cr *wayland-font-family* 0 0)
-             (cairo-set-font-size cr *wayland-font-size*)
+             (unless *have-pango*
+               (cairo-select-font-face cr *wayland-font-family* 0 0)
+               (cairo-set-font-size cr *wayland-font-size*))
              (let* ((left   (module-fragments
                              (collect-modules-for :left   instances)))
                     (center (module-fragments
@@ -219,15 +313,18 @@ module-fragments helper already inserts space fragments)."
                     (right  (module-fragments
                              (collect-modules-for :right  instances)))
                     (pad 12.0d0)
-                    (baseline (+ (/ h 2.0) (/ *wayland-font-size* 3.0d0))))
+                    ;; Pango: top-left coords; cairo: baseline.
+                    (ypos (if *have-pango*
+                              (/ (- h (* *wayland-font-size* 1.4)) 2.0)
+                              (+ (/ h 2.0) (/ *wayland-font-size* 3.0d0)))))
                (when left
-                 (draw-fragments cr left pad baseline))
+                 (draw-fragments cr left pad ypos))
                (when center
                  (let ((cw (fragment-list-width cr center)))
-                   (draw-fragments cr center (/ (- w cw) 2.0d0) baseline)))
+                   (draw-fragments cr center (/ (- w cw) 2.0d0) ypos)))
                (when right
                  (let ((rw (fragment-list-width cr right)))
-                   (draw-fragments cr right (- w rw pad) baseline)))))
+                   (draw-fragments cr right (- w rw pad) ypos)))))
         (cairo-destroy cr)
         (cairo-surface-destroy surf)))
     (wlbar-output-commit i)
@@ -248,6 +345,8 @@ module-fragments helper already inserts space fragments)."
     (return-from run-wayland))
 
   (apply-theme (getf config :theme))
+  (when (getf config :font)
+    (setf *wayland-font-spec* (getf config :font)))
 
   (let* ((height (or (getf config :height) 28))
          (rc     (wlbar-init height)))

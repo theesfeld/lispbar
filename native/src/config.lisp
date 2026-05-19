@@ -59,6 +59,8 @@ candidate if none exists (for diagnostic messages)."
       (:theme    (setf (getf *config* :theme)  (first args)))
       (:output   (setf (getf *config* :output) (first args)))
       (:tick     (setf (getf *config* :tick)   (first args)))
+      (:height   (setf (getf *config* :height) (first args)))
+      (:font     (setf (getf *config* :font)   (first args)))
       (:log-level
        (setf *log-level* (first args)))
       (otherwise
