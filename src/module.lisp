@@ -175,14 +175,38 @@ under the cursor from this).")
 (defvar *click-output* 0
   "Output index of the click currently being dispatched.")
 
+(defun run-capture (program &rest args)
+  "Run PROGRAM with ARGS, returning its stdout string on success, NIL on
+non-zero exit or missing binary.  Exposed for user modules."
+  (handler-case
+      (multiple-value-bind (out err code)
+          (uiop:run-program (cons program args)
+                            :output :string :error-output nil
+                            :ignore-error-status t)
+        (declare (ignore err))
+        (and (eql code 0) out))
+    (error () nil)))
+
+(defun executable-find-check (name)
+  "Return T when NAME is on $PATH (a quick shell-out check).
+Avoids relying on Lisp implementations to expose PATH lookup."
+  (and (run-capture "sh" "-c"
+                    (format nil "command -v ~a >/dev/null 2>&1 && echo y" name))
+       t))
+
 (defun button->key (button)
-  "Map a Linux input-event-codes.h button number to a keyword."
+  "Map a button number to a keyword.
+The C shim emits both Linux input-event-codes.h BTN_* values (272+)
+for mouse buttons and X11-style 4/5 for scroll wheel directions, so
+we handle both here."
   (case button
     (272 :left)            ; BTN_LEFT
     (273 :right)           ; BTN_RIGHT
     (274 :middle)          ; BTN_MIDDLE
     (275 :side)            ; BTN_SIDE
     (276 :extra)           ; BTN_EXTRA
+    (4   :scroll-up)       ; wl_pointer.axis vertical < 0
+    (5   :scroll-down)     ; wl_pointer.axis vertical > 0
     (t   :left)))
 
 (defun module-action (module button)
@@ -226,12 +250,61 @@ value form (which is treated as the :left action)."
       (logmsg :warn "module ~a click handler failed: ~a"
               (module-name module) e))))
 
+(defvar *subfragment-handlers* (make-hash-table :test 'eql)
+  "OUTPUT-IDX -> list of (X-START X-END HANDLER DATA).  Populated
+by the Wayland renderer when it paints a `:clickable' fragment.
+Hit-tested before the module-level on-click fires.")
+
+(defun reset-subfragments (output-idx)
+  (setf (gethash output-idx *subfragment-handlers*) nil))
+
+(defun record-subfragment (output-idx x-start x-end handler data)
+  (push (list x-start x-end handler data)
+        (gethash output-idx *subfragment-handlers*)))
+
+(defun subfragment-at-x (output-idx x)
+  "Return (HANDLER DATA) for the sub-fragment containing X on
+OUTPUT-IDX, or NIL."
+  (loop for (s e handler data) in (gethash output-idx *subfragment-handlers*)
+        when (and (>= x s) (<= x e))
+        return (list handler data)))
+
 (defun dispatch-module-click (module button output-index &optional (x 0))
-  "Invoke MODULE's action for BUTTON.  X is the surface-x of the click."
-  (let ((action (module-action module button)))
-    (when action
-      (logmsg :debug "click ~a on ~a (output ~d, x ~a)"
-              button (module-name module) output-index x)
-      (let ((*click-x* x)
-            (*click-output* output-index))
-        (run-module-action action module button output-index)))))
+  "Invoke an action for BUTTON.  Tries sub-fragment handlers first
+(e.g. an individual workspace number, an individual tray item),
+then falls back to the module-level `:on-click'."
+  (let ((*click-x* x)
+        (*click-output* output-index))
+    (let ((sub (subfragment-at-x output-index x)))
+      (cond
+        (sub
+         (destructuring-bind (handler data) sub
+           (logmsg :debug "sub-click ~a on ~a -> ~s (data ~s)"
+                   button (module-name module) handler data)
+           (run-subfragment-action handler data module button output-index)))
+        (t
+         (let ((action (module-action module button)))
+           (when action
+             (logmsg :debug "click ~a on ~a (output ~d, x ~a)"
+                     button (module-name module) output-index x)
+             (run-module-action action module button output-index))))))))
+
+(defun run-subfragment-action (handler data module button output-idx)
+  "Invoke a sub-fragment HANDLER.  Recognised shapes:
+
+  NIL                no-op
+  STRING             shell command, run with `sh -c'
+  LIST OF STRINGS    argv, run directly (DATA appended)
+  SYMBOL or FUNCTION called with (DATA BUTTON MODULE OUTPUT-IDX)"
+  (handler-case
+      (cond
+        ((null handler))
+        ((stringp handler) (uiop:launch-program (list "sh" "-c" handler)))
+        ((and (listp handler) (every #'stringp handler))
+         (uiop:launch-program handler))
+        ((functionp handler)
+         (funcall handler data button module output-idx))
+        ((and (symbolp handler) (fboundp handler))
+         (funcall (symbol-function handler) data button module output-idx)))
+    (error (e)
+      (logmsg :warn "sub-fragment handler failed: ~a" e))))

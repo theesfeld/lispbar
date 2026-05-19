@@ -210,6 +210,41 @@ detected or its IPC fails."
 
 ;;; ---- Rendering ----
 
+(defun workspaces-click-handler (data button &rest _)
+  "Switch to the clicked workspace.  DATA is a WORKSPACE record."
+  (declare (ignore _))
+  (when (or (eq button :left) (null button))
+    (let ((name (workspace-name data))
+          (source (detect-workspaces-source)))
+      (handler-case
+          (case source
+            (:sway (uiop:launch-program
+                    (list "swaymsg" "workspace" name)))
+            (:hyprland (uiop:launch-program
+                        (list "hyprctl" "dispatch" "workspace" name)))
+            (:niri (uiop:launch-program
+                    (list "niri" "msg" "action"
+                          "focus-workspace" name))))
+        (error (e)
+          (logmsg :warn "workspaces: failed to switch to ~a: ~a" name e))))))
+
+(defun workspaces-scroll-handler (_d button &rest _)
+  "Wheel up = previous workspace, wheel down = next.  Routed via the
+module-level on-click; handled separately from per-workspace clicks."
+  (declare (ignore _ _d))
+  (let ((cmd (case (detect-workspaces-source)
+               (:sway     (case button
+                            (:scroll-up   '("swaymsg" "workspace" "prev"))
+                            (:scroll-down '("swaymsg" "workspace" "next"))))
+               (:hyprland (case button
+                            (:scroll-up   '("hyprctl" "dispatch" "workspace" "e-1"))
+                            (:scroll-down '("hyprctl" "dispatch" "workspace" "e+1"))))
+               (:niri     (case button
+                            (:scroll-up   '("niri" "msg" "action" "focus-workspace-up"))
+                            (:scroll-down '("niri" "msg" "action" "focus-workspace-down")))))))
+    (when cmd (handler-case (uiop:launch-program cmd)
+                (error (e) (logmsg :warn "workspaces: scroll failed: ~a" e))))))
+
 (defun workspace-fragments-from-records (records)
   (let (frags first)
     (setf first t)
@@ -217,20 +252,29 @@ detected or its IPC fails."
       (unless first
         (push (list *workspaces-separator* :muted) frags))
       (setf first nil)
-      (let ((n         (workspace-name r))
-            (focused-p (workspace-focused r)))
-        (cond
-          (focused-p
-           (push (list (car *workspaces-brackets*) :muted) frags)
-           (push (list n                           :accent) frags)
-           (push (list (cdr *workspaces-brackets*) :muted) frags))
-          (t (push (list n :normal) frags)))))
+      (let* ((n         (workspace-name r))
+             (focused-p (workspace-focused r))
+             (face      (if focused-p :accent :normal)))
+        ;; Brackets aren't clickable (they're decoration).
+        (when focused-p
+          (push (list (car *workspaces-brackets*) :muted) frags))
+        ;; The workspace name itself IS clickable; the renderer
+        ;; records its bbox and routes clicks to `workspaces-click-handler'.
+        (push (list :clickable :text n :face face
+                    :on-click 'workspaces-click-handler :data r)
+              frags)
+        (when focused-p
+          (push (list (cdr *workspaces-brackets*) :muted) frags))))
     (nreverse frags)))
 
 (defmodule :workspaces
   (:doc "Active workspaces (Sway / Hyprland / niri).  Scope is
-configurable via *workspaces-scope* (see docstring)."
-   :position :left :priority 80 :interval 0.5)
+configurable via *workspaces-scope* (see docstring).  Each
+workspace number is independently clickable; scroll wheel moves
+to previous/next."
+   :position :left :priority 80 :interval 0.5
+   :on-click ((:scroll-up   workspaces-scroll-handler)
+              (:scroll-down workspaces-scroll-handler)))
   (let ((records (workspaces-fetch)))
     (cond
       ((null records) nil)

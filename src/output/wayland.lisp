@@ -309,24 +309,42 @@ inside config.lisp - `'(4 8 0 8)' reads as (QUOTE (4 8 0 8))."
 
 ;; Cairo (toy) path -----------------------------------------------
 
+(defun fragment-text-of (f)
+  "Return the renderable text for any fragment shape."
+  (cond ((fragment-gap-p f) " ")
+        ((fragment-clickable-p f) (clickable-text f))
+        (t (first f))))
+
+(defun fragment-face-of (f)
+  (cond ((fragment-gap-p f) :normal)
+        ((fragment-clickable-p f) (clickable-face f))
+        (t (second f))))
+
 (defun cairo-fragment-list-width (cr fragments)
   (loop for f in fragments
         if (fragment-gap-p f) sum *wayland-module-gap*
-        else                  sum (cairo-text-width cr (first f))))
+        else                  sum (cairo-text-width cr (fragment-text-of f))))
 
-(defun cairo-draw-fragments (cr fragments x baseline)
+(defun cairo-draw-fragments (cr fragments x baseline &optional output-idx)
   (let ((pen (coerce x 'double-float)))
     (dolist (f fragments)
       (cond
         ((fragment-gap-p f)
          (incf pen *wayland-module-gap*))
         (t
-         (let ((text (first f)) (face (second f)))
+         (let* ((text (fragment-text-of f))
+                (face (fragment-face-of f))
+                (start pen)
+                (text-w (cairo-text-width cr text)))
            (apply #'cairo-set-source-rgba cr
                   (rgba->doubles (theme-color face)))
            (cairo-move-to cr pen baseline)
            (cairo-show-text cr text)
-           (incf pen (cairo-text-width cr text))))))
+           (incf pen text-w)
+           (when (and output-idx (fragment-clickable-p f))
+             (record-subfragment output-idx start pen
+                                 (clickable-handler f)
+                                 (clickable-data f)))))))
     pen))
 
 ;; Pango path -----------------------------------------------------
@@ -338,11 +356,11 @@ inside config.lisp - `'(4 8 0 8)' reads as (QUOTE (4 8 0 8))."
          (progn (pango-layout-set-fd layout fd)
                 (loop for f in fragments
                       if (fragment-gap-p f) sum *wayland-module-gap*
-                      else                  sum (pango-text-width layout (first f))))
+                      else                  sum (pango-text-width layout (fragment-text-of f))))
       (pango-fd-free fd)
       (g-object-unref layout))))
 
-(defun pango-draw-fragments (cr fragments x y-top)
+(defun pango-draw-fragments (cr fragments x y-top &optional output-idx)
   (let ((layout (pango-cairo-create-layout cr))
         (fd     (pango-fd-from-string *wayland-font-spec*))
         (pen    (coerce x 'double-float)))
@@ -353,13 +371,19 @@ inside config.lisp - `'(4 8 0 8)' reads as (QUOTE (4 8 0 8))."
                     ((fragment-gap-p f)
                      (incf pen *wayland-module-gap*))
                     (t
-                     (let ((text (first f)) (face (second f)))
+                     (let* ((text (fragment-text-of f))
+                            (face (fragment-face-of f))
+                            (start pen))
                        (apply #'cairo-set-source-rgba cr
                               (rgba->doubles (theme-color face)))
                        (cairo-move-to cr pen y-top)
                        (pango-layout-set-text layout text -1)
                        (pango-cairo-show-layout cr layout)
-                       (incf pen (pango-text-width layout text)))))))
+                       (incf pen (pango-text-width layout text))
+                       (when (and output-idx (fragment-clickable-p f))
+                         (record-subfragment output-idx start pen
+                                              (clickable-handler f)
+                                              (clickable-data f))))))))
       (pango-fd-free fd)
       (g-object-unref layout))
     pen))
@@ -371,13 +395,15 @@ inside config.lisp - `'(4 8 0 8)' reads as (QUOTE (4 8 0 8))."
       (pango-fragment-list-width cr fragments)
       (cairo-fragment-list-width cr fragments)))
 
-(defun draw-fragments (cr fragments x baseline-or-top)
+(defun draw-fragments (cr fragments x baseline-or-top &optional output-idx)
   "Paint FRAGMENTS at horizontal position X.
 BASELINE-OR-TOP is the cairo baseline when *have-pango* is NIL, and
-the layout top-edge otherwise (pango positions glyphs from the top)."
+the layout top-edge otherwise (pango positions glyphs from the top).
+When OUTPUT-IDX is supplied, `:clickable' fragments record their
+painted bbox in *SUBFRAGMENT-HANDLERS* for click hit-testing."
   (if *have-pango*
-      (pango-draw-fragments cr fragments x baseline-or-top)
-      (cairo-draw-fragments cr fragments x baseline-or-top)))
+      (pango-draw-fragments cr fragments x baseline-or-top output-idx)
+      (cairo-draw-fragments cr fragments x baseline-or-top output-idx)))
 
 ;;; ---- Tray rendering ----
 ;;;
@@ -595,7 +621,7 @@ real icon pixels rather than text width."
                  (setf pen (draw-tray-fragments cr tray-frags pen
                                                   baseline output-idx))))
               (t
-               (draw-fragments cr frags pen baseline)
+               (draw-fragments cr frags pen baseline output-idx)
                (incf pen (fragment-list-width cr frags))))
             (record-bbox output-idx m mod-start pen)))))
     pen))
@@ -609,6 +635,7 @@ real icon pixels rather than text width."
     (when (or (zerop w) (zerop h) (cffi:null-pointer-p data))
       (return-from render-output nil))
     (reset-bboxes i)
+    (reset-subfragments i)
     (let* ((surf (cairo-isc4d data +cairo-format-argb32+ w h stride))
            (cr   (cairo-create surf)))
       (unwind-protect

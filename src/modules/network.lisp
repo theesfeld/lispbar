@@ -174,10 +174,24 @@ to the common NetworkManager / iwd GUIs.  NIL to disable.")
                (sig (format nil "WiFi: ~a   ~d% on ~a" (first sig) (second sig) device))
                (t   (format nil "~a (~a)" name device)))))))))
 
+(defvar *network-on-middle-click* "nmcli radio wifi"
+  "Shell command for middle-click.  Default prints the current wifi
+radio state to stderr - safe and informative.  Override to e.g.
+\"nmcli radio wifi off\" if you want a quick wifi kill switch.")
+
+(defun network-middle-click (_m _b _i)
+  (declare (ignore _m _b _i))
+  (when (and *network-on-middle-click*
+             (plusp (length *network-on-middle-click*)))
+    (uiop:launch-program (list "sh" "-c" *network-on-middle-click*))))
+
 (defmodule :network
-  (:doc "Active network connection (WiFi SSID + signal, Ethernet, VPN)."
+  (:doc "Active network connection (WiFi SSID + signal, Ethernet, VPN).
+Left-click opens the network manager GUI; middle-click runs an
+arbitrary command (default: print wifi radio state)."
    :position :right :priority 75 :interval 5.0
-   :on-click ((:left network-left-click))
+   :on-click ((:left   network-left-click)
+              (:middle network-middle-click))
    :tooltip  network-tooltip)
   (or (network-via-nmcli)
       (network-via-proc)

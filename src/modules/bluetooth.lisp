@@ -38,8 +38,6 @@
            ((zerop n) "Bluetooth on - no devices connected")
            (t (format nil "Bluetooth on - ~d device~:p connected" n)))))))
 
-(defun executable-find-check (name)
-  (and (run-capture "sh" "-c" (format nil "command -v ~a >/dev/null 2>&1 && echo y" name)) t))
 
 (defmodule :bluetooth (:doc "Adapter state and connection count."
                        :position :right :priority 50 :interval 10.0

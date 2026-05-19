@@ -107,13 +107,16 @@
 ;;; `setf'.  Listed alphabetically.
 
 ;; ----- :audio -----
-;; Left-click and middle-click actions (shell commands; NIL to disable).
+;; Click bindings: left = open GUI mixer, middle = toggle mute,
+;; scroll = adjust volume.
 ;;
 ;;   string | NIL                Built-in defaults:
 ;;                                 "pavucontrol || pwvucontrol"
 ;;                                 "pactl set-sink-mute @DEFAULT_SINK@ toggle"
 (setf *audio-on-click*        "pavucontrol || pwvucontrol")
 (setf *audio-on-middle-click* "pactl set-sink-mute @DEFAULT_SINK@ toggle")
+;;   integer (percentage points)  Built-in default: 5
+(setf *audio-scroll-step* 5)
 
 ;; ----- :battery -----
 ;; No tunables exposed; faces are picked from charge level/state.
@@ -125,7 +128,14 @@
 (setf *bluetooth-on-middle-click* "bluetoothctl power toggle")
 
 ;; ----- :brightness -----
-;; No tunables exposed; tries brightnessctl then sysfs.
+;; Scroll-wheel changes brightness via brightnessctl.  Step is
+;; configurable.  Left-click runs an optional shell command.
+;;
+;;   integer (percentage points)   Built-in default: 5
+(setf *brightness-step* 5)
+;;
+;;   string | NIL                  Built-in default: NIL
+(setf *brightness-on-click* nil)
 
 ;; ----- :clock -----
 ;; Time format.
@@ -161,6 +171,9 @@
 (setf *media-max-length* 60)
 
 ;; ----- :network -----
+;; Left-click opens the NM/iwd GUI; middle-click runs a configurable
+;; command (default: print wifi radio state).
+;;
 ;; Format string for WiFi.  Placeholders:
 ;;   {ssid} {signal} {bars} {device}
 ;;
@@ -170,13 +183,18 @@
 (setf *network-format-ethernet* "ETH")
 ;;   string                      Built-in default: "OFF"
 (setf *network-format-down*     "OFF")
-;; Left-click action (NetworkManager / iwd GUIs by default).
-;;
 ;;   string | NIL                Built-in default:
 ;;                                 "nm-connection-editor || iwgtk"
-(setf *network-on-click* "nm-connection-editor || iwgtk")
+(setf *network-on-click*        "nm-connection-editor || iwgtk")
+;;   string | NIL                Built-in default: "nmcli radio wifi"
+(setf *network-on-middle-click* "nmcli radio wifi")
 
 ;; ----- :workspaces -----
+;; Each workspace number is independently clickable (left-click
+;; switches to that workspace).  Scroll-wheel on the workspaces
+;; module moves to previous/next.  Sway, Hyprland and niri are all
+;; handled via their native CLI tools.
+;;
 ;; Scope of the list.
 ;;   :current-output   workspaces on the focused monitor only
 ;;   :all              every workspace across every monitor
@@ -237,3 +255,87 @@
 (setf *wayland-tooltip-padding-y* 6.0d0)
 ;;   integer (pixels)            Built-in default: 6.0d0
 (setf *wayland-tooltip-corner* 8.0d0)
+
+;;; ==========================================================
+;;; 8.  Click handler reference for custom modules
+;;; ==========================================================
+;;;
+;;; `defmodule' takes an `:on-click' plist mapping button keywords
+;;; to handlers:
+;;;
+;;;   :left   :right   :middle   :scroll-up   :scroll-down
+;;;   :side   :extra
+;;;
+;;; A handler may be:
+;;;
+;;;   STRING          shell command, run via `sh -c'
+;;;   LIST            argv list, run directly via uiop:launch-program
+;;;   SYMBOL          named function, called with (MODULE BUTTON OUTPUT-IDX)
+;;;
+;;; Example - simple shell commands:
+;;;
+;;;   (in-package :lispbar)
+;;;
+;;;   (defmodule :weather
+;;;     (:doc "Hourly forecast"
+;;;      :position :right :priority 35 :interval 600.0
+;;;      :on-click ((:left  "xdg-open https://wttr.in")
+;;;                 (:right "notify-send 'Weather' \"$(curl -s wttr.in/?format=4)\"")))
+;;;     (run-capture "curl" "-s" "wttr.in/?format=3"))
+;;;
+;;; Example - named functions with full info:
+;;;
+;;;   (defun my-click (module button output-idx)
+;;;     (format *error-output* "clicked ~a (~a)~%"
+;;;             (module-name module) button))
+;;;
+;;;   (defmodule :foo (:on-click ((:left  my-click)
+;;;                               (:right my-click)))
+;;;     ...)
+;;;
+;;; ---- Per-sub-fragment click handlers ----
+;;;
+;;; If your module returns a list-of-fragments output, individual
+;;; fragments can carry their own click handlers.  The :workspaces
+;;; module uses this so each workspace number is independently
+;;; clickable.
+;;;
+;;; Fragment shapes accepted by the renderer:
+;;;
+;;;   (TEXT FACE)
+;;;     plain text in FACE
+;;;
+;;;   (:gap PIXELS)
+;;;     horizontal whitespace between modules
+;;;
+;;;   (:clickable :text TEXT :face FACE :on-click HANDLER :data DATA)
+;;;     painted like text but the renderer records its bbox; clicks
+;;;     anywhere in the bbox invoke HANDLER with (DATA BUTTON MODULE
+;;;     OUTPUT-IDX).  HANDLER is the same shape as above (string,
+;;;     argv list, symbol, function).
+;;;
+;;; Custom-module example with per-fragment handlers:
+;;;
+;;;   (defun pin-screen (data button m i)
+;;;     (declare (ignore button m i))
+;;;     (uiop:launch-program (list "swaymsg" "output" data "power" "off")))
+;;;
+;;;   (defmodule :outputs (:doc "Click an output name to power it off"
+;;;                        :position :right :priority 20 :interval 30.0)
+;;;     (let* ((j (run-capture "swaymsg" "-t" "get_outputs" "-r"))
+;;;            (names (and j (loop for o in (split-json-objects j)
+;;;                                collect (json-string-value o "name")))))
+;;;       (and names (list :fragments
+;;;                        (loop for n in names
+;;;                              collect (list :clickable :text n
+;;;                                            :face :accent
+;;;                                            :on-click 'pin-screen
+;;;                                            :data n)
+;;;                              collect (list "  " :muted))))))
+;;;
+;;; ---- Hover tooltips ----
+;;;
+;;; `defmodule' also takes `:tooltip', a string / function-of-no-args /
+;;; symbol naming such a function.  Whatever it returns is rendered
+;;; as a floating tooltip below the module while the pointer hovers.
+;;; See section 7 for visual tuning.
