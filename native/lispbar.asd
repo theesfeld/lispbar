@@ -1,0 +1,30 @@
+;;;; lispbar.asd  -- ASDF system definition for the native Lispbar binary
+;;;;
+;;;; Build with:  sbcl --non-interactive --load build.lisp
+;;;; Result:      ./lispbar  (standalone native executable)
+
+(asdf:defsystem #:lispbar
+  :description "Native status bar implemented in Common Lisp."
+  :author      "Lispbar contributors"
+  :license     "GPL-3.0-or-later"
+  :version     "0.1.0"
+  :serial      t
+  :depends-on  ()
+  :components ((:module "src"
+                :components
+                ((:file "package")
+                 (:file "log")
+                 (:file "config")
+                 (:file "module")
+                 (:module "modules"
+                  :components ((:file "clock")
+                               (:file "cpu")
+                               (:file "memory")
+                               (:file "battery")
+                               (:file "audio")
+                               (:file "bluetooth")
+                               (:file "brightness")))
+                 (:module "output"
+                  :components ((:file "stdout")
+                               (:file "wayland-stub")))
+                 (:file "main")))))

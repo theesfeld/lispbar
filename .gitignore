@@ -73,3 +73,7 @@ lispbar-pkg.el
 # TAGS files
 TAGS
 tags
+
+# Native (SBCL) build artefacts
+native/lispbar
+native/**/*.fasl
