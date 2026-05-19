@@ -101,9 +101,12 @@ Two parts:
   override or `NIL` to hide.
 * Left-click: spawns a terminal running `lispbar registry browse`
   (the fzf-driven picker — see [registry.md](registry.md)).
-* The terminal is resolved by `*registry-terminal*` (default tries
-  `$TERMINAL`, `foot`, `alacritty`, `kitty`, `wezterm`,
-  `gnome-terminal`, `konsole`, `xterm`).
+* The terminal is resolved by `*registry-terminal*` — a
+  space-separated preference list (default: `$TERMINAL footclient
+  foot alacritty kitty wezterm gnome-terminal konsole xterm`).
+  The first entry found on `PATH` wins.  `footclient` comes
+  before `foot` so users running a foot server get the snappier
+  client variant.
 * For full control, set `*registry-on-click*` to your own shell
   command — that takes precedence over the built-in terminal-spawn.
 

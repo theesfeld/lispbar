@@ -15,14 +15,17 @@ emoji.  Override with whatever your bar font can render — e.g.
 entirely.")
 
 (defvar *registry-terminal*
-  "$TERMINAL || foot || alacritty || kitty || wezterm || gnome-terminal \
-|| konsole || xterm"
-  "Shell expression that resolves to a terminal command capable of
-running an arbitrary program (passed via `-e CMD').  Override if
-the auto-detection picks the wrong one:
+  "$TERMINAL footclient foot alacritty kitty wezterm gnome-terminal konsole xterm"
+  "Space-separated list of terminal commands tried in order; the
+first one found on PATH wins.  Each entry may include flags, but
+the actual program-to-run is always appended via `-e CMD'.
+Override if the auto-detection picks the wrong one:
 
   (setf *registry-terminal* \"alacritty\")
-  (setf *registry-terminal* \"foot -a registry\")")
+  (setf *registry-terminal* \"foot -a registry\")
+
+`footclient' is listed before `foot' so users running a foot
+server get the snappier startup of the client variant.")
 
 (defvar *registry-on-click* nil
   "Optional shell command run on left-click instead of the built-in
@@ -34,10 +37,12 @@ finder.")
   "Run `lispbar registry browse' inside a freshly-spawned terminal."
   (let* ((picker  "lispbar registry browse")
          ;; Resolve the first terminal in the user's preference list
-         ;; that's actually on PATH.  `command -v' returns the path
-         ;; for the first one that exists.
-         (resolve (format nil "for t in ~a; do command -v $t >/dev/null && \
-echo \"$t\" && break; done" *registry-terminal*))
+         ;; that's actually on PATH.  The list is expanded by the
+         ;; shell (so $TERMINAL works) and we take the first token
+         ;; that `command -v' resolves.
+         (resolve (format nil "for t in ~a; do \
+command -v \"$t\" >/dev/null 2>&1 && echo \"$t\" && exit 0; \
+done; exit 1" *registry-terminal*))
          (term    (string-trim '(#\Space #\Newline #\Tab)
                                 (or (run-capture "sh" "-c" resolve) ""))))
     (cond
