@@ -37,6 +37,7 @@ struct bar_output {
     uint32_t                      registry_id;
     char                         *name;
 
+    /* Main bar surface ------------------------------------------- */
     struct wl_surface            *surface;
     struct zwlr_layer_surface_v1 *layer_surface;
     struct wl_buffer             *buffer;
@@ -48,6 +49,21 @@ struct bar_output {
     int        height;
     int        configured;
     int        closed;
+
+    /* Tooltip surface (lazy) ------------------------------------- */
+    struct wl_surface            *tt_surface;
+    struct zwlr_layer_surface_v1 *tt_layer;
+    struct wl_buffer             *tt_buffer;
+    int        tt_shm_fd;
+    uint32_t  *tt_pixels;
+    size_t     tt_pixels_size;
+    int        tt_width;
+    int        tt_height;
+    int        tt_configured;
+    int        tt_visible;
+    int        tt_anchor_x;       /* requested horizontal margin */
+    int        tt_pending_w;
+    int        tt_pending_h;
 };
 
 /* ---- Globals ---- */
@@ -166,6 +182,7 @@ static struct bar_output *register_output(struct wl_output *out, uint32_t id) {
     bo->wl_output   = out;
     bo->registry_id = id;
     bo->shm_fd      = -1;
+    bo->tt_shm_fd   = -1;
     wl_output_add_listener(out, &output_listener, bo);
     return bo;
 }
@@ -360,6 +377,126 @@ static void shm_free(struct bar_output *bo) {
 
 /* ---- Per-output lifecycle ---- */
 
+/* ---- Tooltip shm / surface ---- */
+
+static int tt_shm_alloc(struct bar_output *bo, int width, int height) {
+    int stride = width * 4;
+    size_t size = (size_t)stride * (size_t)height;
+    int fd = anon_shm_fd(size);
+    if (fd < 0) return -1;
+    void *map = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (map == MAP_FAILED) { close(fd); return -1; }
+    struct wl_shm_pool *pool = wl_shm_create_pool(g_shm, fd, size);
+    struct wl_buffer *buf = wl_shm_pool_create_buffer(pool, 0, width, height,
+                                                      stride,
+                                                      WL_SHM_FORMAT_ARGB8888);
+    wl_shm_pool_destroy(pool);
+    bo->tt_shm_fd      = fd;
+    bo->tt_pixels      = (uint32_t *)map;
+    bo->tt_pixels_size = size;
+    bo->tt_buffer      = buf;
+    memset(bo->tt_pixels, 0, size);
+    return 0;
+}
+
+static void tt_shm_free(struct bar_output *bo) {
+    if (bo->tt_buffer) { wl_buffer_destroy(bo->tt_buffer); bo->tt_buffer = NULL; }
+    if (bo->tt_pixels) { munmap(bo->tt_pixels, bo->tt_pixels_size);
+                        bo->tt_pixels = NULL; bo->tt_pixels_size = 0; }
+    if (bo->tt_shm_fd >= 0) { close(bo->tt_shm_fd); bo->tt_shm_fd = -1; }
+}
+
+static void tt_layer_configure(void *data,
+                                struct zwlr_layer_surface_v1 *ls,
+                                uint32_t serial, uint32_t w, uint32_t h) {
+    struct bar_output *bo = data;
+    zwlr_layer_surface_v1_ack_configure(ls, serial);
+    if (w == 0) w = bo->tt_pending_w ? bo->tt_pending_w : 1;
+    if (h == 0) h = bo->tt_pending_h ? bo->tt_pending_h : 1;
+    if ((int)w != bo->tt_width || (int)h != bo->tt_height) {
+        tt_shm_free(bo);
+        bo->tt_width  = (int)w;
+        bo->tt_height = (int)h;
+        if (tt_shm_alloc(bo, bo->tt_width, bo->tt_height) < 0) {
+            fprintf(stderr, "wlbar: tooltip shm_alloc failed\n");
+            return;
+        }
+    }
+    bo->tt_configured = 1;
+}
+
+static void tt_layer_closed(void *data, struct zwlr_layer_surface_v1 *_ls) {
+    (void)_ls;
+    struct bar_output *bo = data;
+    /* Compositor closed the tooltip surface (e.g. output gone).
+     * Tear it down so the next show() recreates cleanly. */
+    if (bo->tt_layer)   { zwlr_layer_surface_v1_destroy(bo->tt_layer);
+                          bo->tt_layer = NULL; }
+    if (bo->tt_surface) { wl_surface_destroy(bo->tt_surface);
+                          bo->tt_surface = NULL; }
+    tt_shm_free(bo);
+    bo->tt_width = bo->tt_height = 0;
+    bo->tt_configured = 0;
+    bo->tt_visible    = 0;
+}
+
+static const struct zwlr_layer_surface_v1_listener tt_layer_listener = {
+    .configure = tt_layer_configure,
+    .closed    = tt_layer_closed,
+};
+
+static int tt_ensure_surface(struct bar_output *bo, int w, int h, int anchor_x) {
+    if (!bo->tt_surface) {
+        bo->tt_surface = wl_compositor_create_surface(g_compositor);
+        bo->tt_layer = zwlr_layer_shell_v1_get_layer_surface(
+            g_layer_shell, bo->tt_surface, bo->wl_output,
+            ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "lispbar-tooltip");
+
+        /* Anchor to the same horizontal edge as the bar so margins
+         * read as "below the bar" when bar is on top, "above the
+         * bar" when bar is on bottom. */
+        uint32_t anchor =
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+            (g_requested_position == WLBAR_POSITION_BOTTOM
+              ? ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
+              : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+        zwlr_layer_surface_v1_set_anchor(bo->tt_layer, anchor);
+        zwlr_layer_surface_v1_set_keyboard_interactivity(
+            bo->tt_layer,
+            ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+        /* Don't reserve any exclusive zone - the tooltip floats. */
+        zwlr_layer_surface_v1_set_exclusive_zone(bo->tt_layer, -1);
+        zwlr_layer_surface_v1_add_listener(bo->tt_layer,
+                                            &tt_layer_listener, bo);
+    }
+
+    /* Update size + position. */
+    if (w != bo->tt_pending_w || h != bo->tt_pending_h ||
+        anchor_x != bo->tt_anchor_x) {
+        bo->tt_pending_w = w;
+        bo->tt_pending_h = h;
+        bo->tt_anchor_x  = anchor_x;
+        bo->tt_configured = 0;
+
+        int outer = (g_requested_position == WLBAR_POSITION_BOTTOM
+                     ? g_margin_bottom : g_margin_top);
+        int top_or_bottom_margin =
+            (g_requested_position == WLBAR_POSITION_BOTTOM
+              ? outer + g_requested_height + 4
+              : outer + g_requested_height + 4);
+        zwlr_layer_surface_v1_set_size(bo->tt_layer, w, h);
+        zwlr_layer_surface_v1_set_margin(bo->tt_layer,
+            (g_requested_position == WLBAR_POSITION_BOTTOM
+              ? 0 : top_or_bottom_margin),
+            0,
+            (g_requested_position == WLBAR_POSITION_BOTTOM
+              ? top_or_bottom_margin : 0),
+            anchor_x);
+        wl_surface_commit(bo->tt_surface);
+    }
+    return bo->tt_configured;
+}
+
 static int bar_output_open(struct bar_output *bo) {
     bo->surface = wl_compositor_create_surface(g_compositor);
     bo->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
@@ -394,6 +531,17 @@ static int bar_output_open(struct bar_output *bo) {
 }
 
 static void bar_output_close(struct bar_output *bo) {
+    /* Tooltip first so it doesn't outlive its parent surface */
+    tt_shm_free(bo);
+    if (bo->tt_layer)     { zwlr_layer_surface_v1_destroy(bo->tt_layer);
+                             bo->tt_layer = NULL; }
+    if (bo->tt_surface)   { wl_surface_destroy(bo->tt_surface);
+                             bo->tt_surface = NULL; }
+    bo->tt_configured = bo->tt_visible = 0;
+    bo->tt_width = bo->tt_height = 0;
+    bo->tt_pending_w = bo->tt_pending_h = 0;
+    bo->tt_anchor_x  = 0;
+
     shm_free(bo);
     if (bo->layer_surface) { zwlr_layer_surface_v1_destroy(bo->layer_surface);
                              bo->layer_surface = NULL; }
@@ -496,6 +644,71 @@ int wlbar_pointer_hover(int *output_idx, double *x, double *y) {
     if (x)          *x          = g_pointer_x;
     if (y)          *y          = g_pointer_y;
     return 1;
+}
+
+/* ---- Tooltip API ---- */
+
+int wlbar_tooltip_show(int output, int anchor_x, int width, int height) {
+    if (output < 0 || output >= g_output_count) return 0;
+    if (width  <= 0 || height <= 0)             return 0;
+    struct bar_output *bo = &g_outputs[output];
+    if (!tt_ensure_surface(bo, width, height, anchor_x)) {
+        /* Configure not yet acknowledged; caller should try again
+         * next tick.  Round-trip once to give it a chance. */
+        wl_display_roundtrip(g_display);
+    }
+    bo->tt_visible = 1;
+    return bo->tt_configured;
+}
+
+uint32_t *wlbar_tooltip_pixels(int output) {
+    if (output < 0 || output >= g_output_count) return NULL;
+    return g_outputs[output].tt_pixels;
+}
+
+int wlbar_tooltip_stride(int output) {
+    if (output < 0 || output >= g_output_count) return 0;
+    return g_outputs[output].tt_width * 4;
+}
+
+int wlbar_tooltip_width(int output) {
+    if (output < 0 || output >= g_output_count) return 0;
+    return g_outputs[output].tt_width;
+}
+
+int wlbar_tooltip_height(int output) {
+    if (output < 0 || output >= g_output_count) return 0;
+    return g_outputs[output].tt_height;
+}
+
+void wlbar_tooltip_commit(int output) {
+    if (output < 0 || output >= g_output_count) return;
+    struct bar_output *bo = &g_outputs[output];
+    if (!bo->tt_buffer || !bo->tt_surface) return;
+    wl_surface_attach(bo->tt_surface, bo->tt_buffer, 0, 0);
+    wl_surface_damage_buffer(bo->tt_surface, 0, 0,
+                              bo->tt_width, bo->tt_height);
+    wl_surface_commit(bo->tt_surface);
+    wl_display_flush(g_display);
+}
+
+void wlbar_tooltip_hide(int output) {
+    if (output < 0 || output >= g_output_count) return;
+    struct bar_output *bo = &g_outputs[output];
+    if (!bo->tt_visible) return;
+    bo->tt_visible = 0;
+    /* Clear the buffer to transparent and re-commit so the
+     * compositor doesn't keep painting the last frame. */
+    if (bo->tt_pixels) {
+        memset(bo->tt_pixels, 0, bo->tt_pixels_size);
+        if (bo->tt_buffer && bo->tt_surface) {
+            wl_surface_attach(bo->tt_surface, bo->tt_buffer, 0, 0);
+            wl_surface_damage_buffer(bo->tt_surface, 0, 0,
+                                      bo->tt_width, bo->tt_height);
+            wl_surface_commit(bo->tt_surface);
+            wl_display_flush(g_display);
+        }
+    }
 }
 
 int       wlbar_output_count (void) { return g_output_count; }

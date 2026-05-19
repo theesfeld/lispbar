@@ -107,6 +107,22 @@ cairo_show_text which has no font fallback or shaping."
 (cffi:defcfun ("wlbar_pointer_hover"      wlbar-pointer-hover)      :int
   (output :pointer) (x :pointer) (y :pointer))
 
+;; Tooltip secondary-surface API
+(cffi:defcfun ("wlbar_tooltip_show"     wlbar-tooltip-show)     :int
+  (output :int) (anchor-x :int) (w :int) (h :int))
+(cffi:defcfun ("wlbar_tooltip_pixels"   wlbar-tooltip-pixels)   :pointer
+  (output :int))
+(cffi:defcfun ("wlbar_tooltip_stride"   wlbar-tooltip-stride)   :int
+  (output :int))
+(cffi:defcfun ("wlbar_tooltip_width"    wlbar-tooltip-width)    :int
+  (output :int))
+(cffi:defcfun ("wlbar_tooltip_height"   wlbar-tooltip-height)   :int
+  (output :int))
+(cffi:defcfun ("wlbar_tooltip_commit"   wlbar-tooltip-commit)   :void
+  (output :int))
+(cffi:defcfun ("wlbar_tooltip_hide"     wlbar-tooltip-hide)     :void
+  (output :int))
+
 ;;; ---------- cairo FFI ----------
 
 (defconstant +cairo-format-argb32+ 0)
@@ -149,6 +165,15 @@ cairo_show_text which has no font fallback or shaping."
   (cr :pointer) (sx :double) (sy :double))
 (cffi:defcfun ("cairo_set_source_surface" cairo-set-source-surface) :void
   (cr :pointer) (surf :pointer) (x :double) (y :double))
+(cffi:defcfun ("cairo_image_surface_create_from_png"
+               cairo-image-surface-create-from-png) :pointer
+  (filename :string))
+(cffi:defcfun ("cairo_surface_status"     cairo-surface-status)     :int
+  (surf :pointer))
+(cffi:defcfun ("cairo_image_surface_get_width"  cairo-image-surface-get-width)  :int
+  (surf :pointer))
+(cffi:defcfun ("cairo_image_surface_get_height" cairo-image-surface-get-height) :int
+  (surf :pointer))
 
 (defconstant +cairo-operator-clear+  0)
 (defconstant +cairo-operator-source+ 1)
@@ -366,6 +391,42 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
 (defvar *tray-item-padding* 6.0d0
   "Pixels between adjacent tray icons / labels.")
 
+(defvar *icon-cache* (make-hash-table :test #'equal)
+  "Maps absolute PATH -> cairo surface pointer.  Loaded lazily by
+`load-icon-file' so subsequent renders don't hit disk.  Surfaces
+live for the process lifetime; the LRU concern is small (a couple
+of dozen tray icons at most).")
+
+(defun load-icon-file (path)
+  "Return a cairo image surface for the PNG/SVG at PATH, or NIL."
+  (or (gethash path *icon-cache*)
+      (let ((surf (cairo-image-surface-create-from-png path)))
+        (cond
+          ((or (cffi:null-pointer-p surf)
+               (not (zerop (cairo-surface-status surf))))
+           (when (and surf (not (cffi:null-pointer-p surf)))
+             (cairo-surface-destroy surf))
+           (logmsg :debug "tray: failed to load icon ~a" path)
+           nil)
+          (t (setf (gethash path *icon-cache*) surf)
+             surf)))))
+
+(defun blit-cairo-surface (cr src-surf dest-x dest-y dest-size)
+  "Blit cairo surface SRC-SURF (any size) at DEST-X DEST-Y scaled
+to DEST-SIZE pixels square."
+  (let* ((sw (cairo-image-surface-get-width src-surf))
+         (sh (cairo-image-surface-get-height src-surf))
+         (scale (/ (coerce dest-size 'double-float)
+                   (max (coerce sw 'double-float)
+                        (coerce sh 'double-float)))))
+    (cairo-save cr)
+    (cairo-translate cr (coerce dest-x 'double-float)
+                         (coerce dest-y 'double-float))
+    (cairo-scale cr scale scale)
+    (cairo-set-source-surface cr src-surf 0.0d0 0.0d0)
+    (cairo-paint cr)
+    (cairo-restore cr)))
+
 (defun fragment-tray-p (f)
   "Return non-NIL if F is a synthetic tray placeholder fragment."
   (and (consp f) (eq (first f) :tray-placeholder)))
@@ -378,15 +439,15 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
       (unless first (incf w *tray-item-padding*))
       (setf first nil)
       (case (tray-fragment-kind tf)
-        (:pixmap (incf w *tray-icon-size*))
-        (t       (incf w (if *have-pango*
-                             (let ((lay (pango-cairo-create-layout cr))
-                                   (fd  (pango-fd-from-string *wayland-font-spec*)))
-                               (pango-layout-set-fd lay fd)
-                               (prog1 (pango-text-width lay (tray-fragment-label tf))
-                                 (pango-fd-free fd)
-                                 (g-object-unref lay)))
-                             (cairo-text-width cr (tray-fragment-label tf)))))))
+        ((:pixmap :icon-file) (incf w *tray-icon-size*))
+        (t                    (incf w (if *have-pango*
+                                          (let ((lay (pango-cairo-create-layout cr))
+                                                (fd  (pango-fd-from-string *wayland-font-spec*)))
+                                            (pango-layout-set-fd lay fd)
+                                            (prog1 (pango-text-width lay (tray-fragment-label tf))
+                                              (pango-fd-free fd)
+                                              (g-object-unref lay)))
+                                          (cairo-text-width cr (tray-fragment-label tf)))))))
     w))
 
 (defun blit-pixmap (cr ptr w h dest-x dest-y dest-size)
@@ -428,6 +489,23 @@ scaled to fit DEST-SIZE pixels square."
                           (tray-fragment-pixmap-h tf)
                           pen dest-y dest-size)
              (incf pen dest-size)))
+          (:icon-file
+           (let* ((h (wlbar-output-height output-idx))
+                  (dest-size *tray-icon-size*)
+                  (dest-y (max 0 (/ (- h dest-size) 2.0d0)))
+                  (surf (load-icon-file (tray-fragment-icon-path tf))))
+             (cond
+               (surf
+                (blit-cairo-surface cr surf pen dest-y dest-size)
+                (incf pen dest-size))
+               (t
+                ;; Icon path resolved but PNG couldn't be loaded
+                ;; (perhaps SVG without librsvg).  Fall back to text.
+                (apply #'cairo-set-source-rgba cr
+                       (rgba->doubles (theme-color :normal)))
+                (cairo-move-to cr pen baseline)
+                (cairo-show-text cr (tray-fragment-label tf))
+                (incf pen (cairo-text-width cr (tray-fragment-label tf)))))))
           (t
            (apply #'cairo-set-source-rgba cr (rgba->doubles (theme-color :normal)))
            (cond
@@ -552,12 +630,13 @@ real icon pixels rather than text width."
                                (/ (- w cw) 2.0d0) ypos i))
                (let ((rw (module-section-width cr right-modules)))
                  (draw-section cr right-modules
-                               (- w rw pad) ypos i)))
-             ;; Tooltip overlay (after everything else; on top).
-             (draw-tooltip-overlay cr i w h))
+                               (- w rw pad) ypos i))))
         (cairo-destroy cr)
         (cairo-surface-destroy surf)))
     (wlbar-output-commit i)
+    ;; Tooltip lives on a separate floating surface; refresh after
+    ;; the bar so bboxes for hit-testing are current.
+    (update-tooltip-overlay i)
     t))
 
 (defun render-frame (instances)
@@ -594,74 +673,134 @@ or NIL."
   "Return the module under the cursor on OUTPUT-IDX at X."
   (module-at-x output-idx x))
 
-(defun paint-tooltip (cr text bbox-start bbox-end bar-w bar-h)
-  "Paint TEXT as an overlay over the bar.
-The tooltip's horizontal position centres above BBOX-START..BBOX-END
-but is clamped inside the bar.  Vertical position is just above the
-bottom edge of the bar."
-  (when (or (null text) (zerop (length text))) (return-from paint-tooltip))
-  ;; Measure text.
-  (let* ((text-w (if *have-pango*
-                     (let ((lay (pango-cairo-create-layout cr))
-                           (fd  (pango-fd-from-string *wayland-font-spec*)))
-                       (pango-layout-set-fd lay fd)
-                       (prog1 (pango-text-width lay text)
-                         (pango-fd-free fd)
-                         (g-object-unref lay)))
-                     (cairo-text-width cr text)))
-         (box-w (+ text-w (* 2 *wayland-tooltip-padding-x*)))
-         (box-h (+ *wayland-font-size* (* 2 *wayland-tooltip-padding-y*)))
-         (centre (/ (+ bbox-start bbox-end) 2.0d0))
-         (box-x (max 4.0d0 (min (- bar-w box-w 4.0d0)
-                                (- centre (/ box-w 2.0d0)))))
-         (box-y (max 0.0d0 (- bar-h box-h 2.0d0))))
-    (cairo-save cr)
-    ;; Background
-    (apply #'cairo-set-source-rgba cr (rgba->doubles *wayland-tooltip-bg*))
-    (cond
-      ((plusp *wayland-tooltip-corner*)
-       (rounded-rect-path cr box-x box-y box-w box-h *wayland-tooltip-corner*)
-       (cairo-fill cr))
-      (t
-       (cairo-rectangle cr box-x box-y box-w box-h)
-       (cairo-fill cr)))
-    ;; Text
-    (apply #'cairo-set-source-rgba cr (rgba->doubles (theme-color :normal)))
-    (let ((tx (+ box-x *wayland-tooltip-padding-x*))
-          (ty (if *have-pango*
-                  (+ box-y *wayland-tooltip-padding-y*)
-                  (+ box-y *wayland-tooltip-padding-y* *wayland-font-size*))))
-      (cond
-        (*have-pango*
-         (let ((lay (pango-cairo-create-layout cr))
-               (fd  (pango-fd-from-string *wayland-font-spec*)))
-           (unwind-protect
-                (progn (pango-layout-set-fd lay fd)
-                       (pango-layout-set-text lay text -1)
-                       (cairo-move-to cr tx ty)
-                       (pango-cairo-show-layout cr lay))
-             (pango-fd-free fd)
-             (g-object-unref lay))))
-        (t
-         (cairo-move-to cr tx ty)
-         (cairo-show-text cr text))))
-    (cairo-restore cr)))
+(defun measure-text-width (cr text)
+  "Return the painted width of TEXT in the current font."
+  (if *have-pango*
+      (let ((lay (pango-cairo-create-layout cr))
+            (fd  (pango-fd-from-string *wayland-font-spec*)))
+        (unwind-protect
+             (progn (pango-layout-set-fd lay fd)
+                    (pango-text-width lay text))
+          (pango-fd-free fd)
+          (g-object-unref lay)))
+      (cairo-text-width cr text)))
 
-(defun draw-tooltip-overlay (cr output-idx bar-w bar-h)
-  "If the pointer is hovering a module on OUTPUT-IDX and that module
-has a tooltip, paint it as an overlay on the bar."
-  (let ((hover (current-hover)))
-    (when (and hover (= (first hover) output-idx))
-      (let* ((x (round (second hover)))
-             (m (hovered-module output-idx x)))
-        (when m
-          (let ((text (resolve-tooltip m)))
-            (when (and text (plusp (length text)))
-              (let ((bbox (find-if (lambda (b) (eq (first b) m))
-                                    (gethash output-idx *module-bboxes*))))
-                (when bbox
-                  (paint-tooltip cr text (second bbox) (third bbox)
-                                 bar-w bar-h))))))))))
+(defun paint-tooltip-into (output-idx text bbox-centre)
+  "Paint TEXT into OUTPUT-IDX's secondary tooltip surface, centred
+horizontally on BBOX-CENTRE (surface-local pixel x of the hovered
+module).  Returns T on success."
+  (let* ((w (wlbar-output-width output-idx))
+         (bar-h (wlbar-output-height output-idx)))
+    (declare (ignore bar-h))
+    ;; Measure the text using a throwaway 1x1 cairo surface (we don't
+    ;; have the tooltip surface yet at the right size).
+    (cffi:with-foreign-object (tmp :uint32 1)
+      (let* ((measure-surf (cairo-isc4d tmp +cairo-format-argb32+ 1 1 4))
+             (measure-cr   (cairo-create measure-surf))
+             text-w box-w box-h)
+        (unwind-protect
+             (progn
+               (unless *have-pango*
+                 (cairo-select-font-face measure-cr *wayland-font-family* 0 0)
+                 (cairo-set-font-size measure-cr *wayland-font-size*))
+               (setf text-w (measure-text-width measure-cr text)
+                     box-w  (round (+ text-w (* 2 *wayland-tooltip-padding-x*)))
+                     box-h  (round (+ *wayland-font-size*
+                                       (* 2 *wayland-tooltip-padding-y*)))))
+          (cairo-destroy measure-cr)
+          (cairo-surface-destroy measure-surf))
+
+        ;; Clamp the tooltip's left edge inside the screen.
+        (let* ((anchor-x (max 0
+                              (min (- w box-w 4)
+                                   (round (- bbox-centre (/ box-w 2.0d0))))))
+               (rc (wlbar-tooltip-show output-idx anchor-x box-w box-h)))
+          (cond
+            ((zerop rc) nil)            ; configure not ready yet
+            (t
+             (let* ((tw     (wlbar-tooltip-width  output-idx))
+                    (th     (wlbar-tooltip-height output-idx))
+                    (data   (wlbar-tooltip-pixels output-idx))
+                    (stride (wlbar-tooltip-stride output-idx)))
+               (when (and (plusp tw) (plusp th) (not (cffi:null-pointer-p data)))
+                 (let* ((surf (cairo-isc4d data +cairo-format-argb32+
+                                            tw th stride))
+                        (cr   (cairo-create surf)))
+                   (unwind-protect
+                        (progn
+                          ;; Clear to transparent
+                          (cairo-set-operator cr +cairo-operator-source+)
+                          (cairo-set-source-rgba cr 0.0d0 0.0d0 0.0d0 0.0d0)
+                          (cairo-paint cr)
+                          (cairo-set-operator cr +cairo-operator-over+)
+                          ;; Background rounded rect
+                          (apply #'cairo-set-source-rgba cr
+                                 (rgba->doubles *wayland-tooltip-bg*))
+                          (cond
+                            ((plusp *wayland-tooltip-corner*)
+                             (rounded-rect-path cr 0 0 tw th
+                                                 *wayland-tooltip-corner*)
+                             (cairo-fill cr))
+                            (t
+                             (cairo-rectangle cr 0.0d0 0.0d0
+                                               (coerce tw 'double-float)
+                                               (coerce th 'double-float))
+                             (cairo-fill cr)))
+                          ;; Text
+                          (unless *have-pango*
+                            (cairo-select-font-face cr *wayland-font-family* 0 0)
+                            (cairo-set-font-size cr *wayland-font-size*))
+                          (apply #'cairo-set-source-rgba cr
+                                 (rgba->doubles (theme-color :normal)))
+                          (let ((tx (coerce *wayland-tooltip-padding-x* 'double-float))
+                                (ty (if *have-pango*
+                                        (coerce *wayland-tooltip-padding-y* 'double-float)
+                                        (+ *wayland-tooltip-padding-y* *wayland-font-size*))))
+                            (cond
+                              (*have-pango*
+                               (let ((lay (pango-cairo-create-layout cr))
+                                     (fd  (pango-fd-from-string *wayland-font-spec*)))
+                                 (unwind-protect
+                                      (progn (pango-layout-set-fd lay fd)
+                                             (pango-layout-set-text lay text -1)
+                                             (cairo-move-to cr tx ty)
+                                             (pango-cairo-show-layout cr lay))
+                                   (pango-fd-free fd)
+                                   (g-object-unref lay))))
+                              (t
+                               (cairo-move-to cr tx (coerce ty 'double-float))
+                               (cairo-show-text cr text))))
+                          t)
+                     (cairo-destroy cr)
+                     (cairo-surface-destroy surf))
+                   (wlbar-tooltip-commit output-idx)
+                   t))))))))))
+
+(defvar *tooltip-state* (make-hash-table :test 'eql)
+  "OUTPUT-IDX -> (MODULE TEXT) most recently displayed, used to
+short-circuit re-painting the same tooltip every tick.")
+
+(defun update-tooltip-overlay (output-idx)
+  "Show or hide OUTPUT-IDX's tooltip surface based on current hover."
+  (let* ((hover (current-hover))
+         (hovered-on (and hover (first hover)))
+         (x (and hover (round (second hover))))
+         (m (and (eql hovered-on output-idx) (hovered-module output-idx x)))
+         (text (and m (resolve-tooltip m))))
+    (cond
+      ((and m text (plusp (length text)))
+       (let* ((bbox (find-if (lambda (b) (eq (first b) m))
+                              (gethash output-idx *module-bboxes*)))
+              (centre (and bbox (/ (+ (second bbox) (third bbox)) 2.0d0)))
+              (prev (gethash output-idx *tooltip-state*)))
+         (when bbox
+           (unless (and prev (eq (first prev) m) (equal (second prev) text))
+             (paint-tooltip-into output-idx text centre)
+             (setf (gethash output-idx *tooltip-state*) (list m text))))))
+      (t
+       (when (gethash output-idx *tooltip-state*)
+         (wlbar-tooltip-hide output-idx)
+         (remhash output-idx *tooltip-state*))))))
 
 ;;; ---- Click event drain ----
 

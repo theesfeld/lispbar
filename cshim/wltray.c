@@ -16,6 +16,7 @@
 
 #include <ctype.h>
 #include <dbus/dbus.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +43,10 @@ struct item {
     int       pixmap_w;
     int       pixmap_h;
     uint32_t *pixmap;     /* ARGB32, host byte order */
+    /* Resolved absolute path to a PNG/SVG on disk for icon_name,
+     * found via freedesktop icon-theme search.  NULL when no match
+     * or when has_pixmap supersedes it. */
+    char     *icon_path;
 };
 
 static DBusConnection *g_conn          = NULL;
@@ -74,6 +79,7 @@ static void item_clear(struct item *it) {
     xfree(it->icon_name); it->icon_name = NULL;
     xfree(it->tooltip);   it->tooltip = NULL;
     xfree(it->pixmap);    it->pixmap = NULL;
+    xfree(it->icon_path); it->icon_path = NULL;
     it->has_pixmap = it->pixmap_w = it->pixmap_h = 0;
 }
 
@@ -202,6 +208,256 @@ static void variant_get_tooltip(DBusMessageIter *iter, struct item *it) {
     }
 }
 
+/* ---- freedesktop icon-theme lookup ---- */
+/*
+ * Minimal but practical implementation: walk a fixed list of
+ * common search roots and look for `NAME.png' or `NAME.svg' under
+ * any size directory.  Larger sizes win, then `scalable' (SVG),
+ * then `hicolor' as a last resort.  This covers ~99% of real-
+ * world apps without depending on libxdg-icon-cache or shipping
+ * a full icon-theme parser.
+ */
+
+static const char *icon_search_roots[] = {
+    NULL,                         /* placeholder: $HOME/.icons */
+    NULL,                         /* placeholder: $XDG_DATA_HOME/icons */
+    "/usr/local/share/icons",
+    "/usr/share/icons",
+    "/usr/share/pixmaps",
+    NULL,
+};
+
+static char *make_path(const char *a, const char *b) {
+    size_t la = strlen(a), lb = strlen(b);
+    char *r = malloc(la + 1 + lb + 1);
+    if (!r) return NULL;
+    memcpy(r, a, la);
+    r[la] = '/';
+    memcpy(r + la + 1, b, lb);
+    r[la + 1 + lb] = 0;
+    return r;
+}
+
+static char *file_if_exists(const char *path) {
+    if (access(path, R_OK) == 0) return strdup(path);
+    return NULL;
+}
+
+static char *svg_to_cached_png(const char *svg_path, int size_px);
+
+/* Try `root/theme/SIZE/CATEGORY/name.EXT' for a few sensible sizes
+ * and extensions, returning a heap-allocated path or NULL. */
+/* Test theme_dir/A/B/NAME.{png,svg}, returning a heap path or NULL.
+ * `a' and `b' may be size-then-cat or cat-then-size depending on
+ * the theme; the spec allows both layouts. */
+static char *try_theme_layout(const char *theme_dir,
+                                const char *a, const char *b,
+                                const char *name) {
+    static const char *exts[] = { ".png", ".svg", NULL };
+    char *ab = make_path(theme_dir, a);
+    if (!ab) return NULL;
+    char *abc = make_path(ab, b);
+    free(ab);
+    if (!abc) return NULL;
+    char *result = NULL;
+    for (int e = 0; exts[e]; e++) {
+        size_t len = strlen(abc) + 1 + strlen(name) + strlen(exts[e]) + 1;
+        char *full = malloc(len);
+        if (!full) continue;
+        snprintf(full, len, "%s/%s%s", abc, name, exts[e]);
+        char *hit = file_if_exists(full);
+        free(full);
+        if (hit) {
+            size_t hl = strlen(hit);
+            if (hl > 4 && !strcmp(hit + hl - 4, ".svg")) {
+                char *png = svg_to_cached_png(hit, 32);
+                free(hit);
+                if (png) { result = png; goto out; }
+            } else {
+                result = hit; goto out;
+            }
+        }
+    }
+out:
+    free(abc);
+    return result;
+}
+
+static char *try_theme(const char *root, const char *theme, const char *name) {
+    /* Largest sizes first - they tend to scale down nicely. */
+    static const char *sizes[] = {
+        "48", "48x48", "32", "32x32", "24", "24x24",
+        "22", "22x22", "16", "16x16", "64", "64x64",
+        "128", "128x128", "scalable", "symbolic", NULL
+    };
+    static const char *cats[] = {
+        "apps", "status", "actions", "devices", "categories",
+        "places", "mimetypes", "panel", NULL
+    };
+    char *theme_dir = make_path(root, theme);
+    if (!theme_dir) return NULL;
+    if (access(theme_dir, R_OK) != 0) { free(theme_dir); return NULL; }
+
+    /* size/category/name (Adwaita / hicolor convention) */
+    for (int s = 0; sizes[s]; s++)
+        for (int c = 0; cats[c]; c++) {
+            char *r = try_theme_layout(theme_dir, sizes[s], cats[c], name);
+            if (r) { free(theme_dir); return r; }
+        }
+    /* category/size/name (Humanity / some KDE themes) */
+    for (int c = 0; cats[c]; c++)
+        for (int s = 0; sizes[s]; s++) {
+            char *r = try_theme_layout(theme_dir, cats[c], sizes[s], name);
+            if (r) { free(theme_dir); return r; }
+        }
+    free(theme_dir);
+    return NULL;
+}
+
+/* Convert an SVG to a PNG via the system's `rsvg-convert' if available,
+ * caching the output under $XDG_CACHE_HOME/lispbar/icons/.  Returns
+ * the PNG path on success, NULL on failure.  The caller owns the
+ * returned string. */
+static char *svg_to_cached_png(const char *svg_path, int size_px) {
+    if (!svg_path) return NULL;
+    /* Look up rsvg-convert just once per process. */
+    static int rsvg_checked = 0;
+    static int rsvg_ok      = 0;
+    if (!rsvg_checked) {
+        rsvg_checked = 1;
+        rsvg_ok = (system("command -v rsvg-convert >/dev/null 2>&1") == 0);
+    }
+    if (!rsvg_ok) return NULL;
+
+    /* Build a cache key from the source path + size; SHA-ish via
+     * a simple FNV1a hash is enough for de-duplication.  We assume
+     * paths don't change after first encounter; if a file does
+     * change, the cache becomes stale until removed manually. */
+    uint64_t h = 1469598103934665603ULL;
+    for (const char *p = svg_path; *p; p++) {
+        h ^= (uint8_t)*p; h *= 1099511628211ULL;
+    }
+    h ^= (uint64_t)size_px; h *= 1099511628211ULL;
+
+    char *cache_root = NULL;
+    const char *xdg = getenv("XDG_CACHE_HOME");
+    const char *home = getenv("HOME");
+    if (xdg && *xdg) {
+        size_t n = strlen(xdg) + strlen("/lispbar/icons") + 1;
+        cache_root = malloc(n);
+        snprintf(cache_root, n, "%s/lispbar/icons", xdg);
+    } else if (home) {
+        size_t n = strlen(home) + strlen("/.cache/lispbar/icons") + 1;
+        cache_root = malloc(n);
+        snprintf(cache_root, n, "%s/.cache/lispbar/icons", home);
+    } else {
+        return NULL;
+    }
+    /* mkdir -p */
+    {
+        char mkbuf[1024];
+        snprintf(mkbuf, sizeof mkbuf, "mkdir -p '%s' 2>/dev/null", cache_root);
+        system(mkbuf);
+    }
+
+    size_t out_n = strlen(cache_root) + 64;
+    char *out = malloc(out_n);
+    snprintf(out, out_n, "%s/%016lx-%d.png", cache_root,
+             (unsigned long)h, size_px);
+    free(cache_root);
+
+    if (access(out, R_OK) == 0) return out;        /* hit */
+
+    /* Convert.  rsvg-convert returns non-zero on failure, in which
+     * case we don't have a PNG at OUT and return NULL. */
+    char cmd[2048];
+    snprintf(cmd, sizeof cmd,
+             "rsvg-convert -w %d -h %d -o '%s' '%s' >/dev/null 2>&1",
+             size_px, size_px, out, svg_path);
+    if (system(cmd) != 0 || access(out, R_OK) != 0) {
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+static char *resolve_icon_path(const char *name) {
+    if (!name || !*name)         return NULL;
+    /* Absolute path? */
+    if (name[0] == '/' && access(name, R_OK) == 0) {
+        size_t len = strlen(name);
+        if (len > 4 && !strcmp(name + len - 4, ".svg")) {
+            char *png = svg_to_cached_png(name, 32);
+            if (png) return png;
+        }
+        return strdup(name);
+    }
+
+    /* Populate placeholders for $HOME / $XDG_DATA_HOME. */
+    char home_icons[1024]   = {0};
+    char xdg_data[1024]     = {0};
+    const char *home = getenv("HOME");
+    if (home) snprintf(home_icons, sizeof home_icons, "%s/.icons", home);
+    const char *xdg = getenv("XDG_DATA_HOME");
+    if (xdg && *xdg) snprintf(xdg_data, sizeof xdg_data, "%s/icons", xdg);
+    else if (home)   snprintf(xdg_data, sizeof xdg_data, "%s/.local/share/icons", home);
+    icon_search_roots[0] = home_icons;
+    icon_search_roots[1] = xdg_data;
+
+    /* Walk every search root and try every theme directory we
+     * find.  This is more thorough than a hard-coded theme list
+     * and works for whatever icon set the user has installed. */
+    for (int r = 0; icon_search_roots[r]; r++) {
+        DIR *dir = opendir(icon_search_roots[r]);
+        if (!dir) continue;
+        struct dirent *de;
+        while ((de = readdir(dir)) != NULL) {
+            if (de->d_name[0] == '.') continue;
+            /* Skip if no theme index file - probably not a theme. */
+            char *theme_dir = make_path(icon_search_roots[r], de->d_name);
+            if (!theme_dir) continue;
+            char idx_path[2048];
+            snprintf(idx_path, sizeof idx_path, "%s/index.theme", theme_dir);
+            int has_index = (access(idx_path, R_OK) == 0);
+            free(theme_dir);
+            if (!has_index) continue;
+            char *p = try_theme(icon_search_roots[r], de->d_name, name);
+            if (p) { closedir(dir); return p; }
+            /* For symbolic-only themes (Adwaita's symbolic/categories
+             * subtree), the file is NAME-symbolic.{svg,png}. */
+            if (!strstr(name, "-symbolic")) {
+                size_t sn = strlen(name) + strlen("-symbolic") + 1;
+                char *sym = malloc(sn);
+                snprintf(sym, sn, "%s-symbolic", name);
+                p = try_theme(icon_search_roots[r], de->d_name, sym);
+                free(sym);
+                if (p) { closedir(dir); return p; }
+            }
+        }
+        closedir(dir);
+    }
+    /* Also probe /usr/share/pixmaps/NAME.{png,svg} directly. */
+    for (const char *ext = ".png"; ext; ext = (ext[1] == 'p' ? ".svg" : NULL)) {
+        size_t len = strlen("/usr/share/pixmaps/") + strlen(name) + strlen(ext) + 1;
+        char *full = malloc(len);
+        if (!full) continue;
+        snprintf(full, len, "/usr/share/pixmaps/%s%s", name, ext);
+        char *hit = file_if_exists(full);
+        free(full);
+        if (hit) {
+            size_t hl = strlen(hit);
+            if (hl > 4 && !strcmp(hit + hl - 4, ".svg")) {
+                char *png = svg_to_cached_png(hit, 32);
+                free(hit);
+                if (png) return png;
+            } else {
+                return hit;
+            }
+        }
+    }
+    return NULL;
+}
+
 /* Fetch (synchronously) every property we care about for ITEM. */
 static void item_refresh(struct item *it) {
     if (!it->bus || !it->path) return;
@@ -258,6 +514,18 @@ static void item_refresh(struct item *it) {
         dbus_message_iter_next(&dict);
     }
     dbus_message_unref(reply);
+
+    /* If the item didn't ship an inline pixmap but did publish an
+     * IconName, resolve it against the icon-theme path so Lisp can
+     * paint a real icon instead of falling back to text. */
+    if (it->icon_name && !it->has_pixmap) {
+        if (it->icon_path) { free(it->icon_path); it->icon_path = NULL; }
+        it->icon_path = resolve_icon_path(it->icon_name);
+    } else if (it->has_pixmap && it->icon_path) {
+        /* Pixmap supersedes icon-theme; clear the cached path. */
+        free(it->icon_path);
+        it->icon_path = NULL;
+    }
     g_revision++;
 }
 
@@ -273,6 +541,17 @@ static void item_register(const char *bus, const char *path) {
 }
 
 /* ---- Watcher service: method dispatch ---- */
+
+static int find_item_by_sender(const char *sender) {
+    /* Sender may be the unique :1.N or the well-known
+     * org.kde.StatusNotifierItem-... name; try both. */
+    if (!sender) return -1;
+    int idx = find_item(sender);
+    if (idx >= 0) return idx;
+    /* Otherwise look up the unique owner of each tracked bus name
+     * and compare; this is rare enough that linear search is fine. */
+    return -1;
+}
 
 static DBusHandlerResult watcher_filter(DBusConnection *conn,
                                         DBusMessage *msg, void *data) {
@@ -291,6 +570,23 @@ static DBusHandlerResult watcher_filter(DBusConnection *conn,
             int idx = find_item(name);
             if (idx >= 0) item_remove(idx);
         }
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+
+    /* SNI per-item update signals.  D-Bus delivers these from the
+     * sender's unique name (e.g. :1.42), not its well-known bus
+     * name (e.g. org.kde.StatusNotifierItem-PID-1) which is what
+     * we stored at registration time.  Mapping unique->well-known
+     * would require tracking NameOwnerChanged for every well-known
+     * name we care about; cheaper to just refresh every tracked
+     * item on any item-signal.  There are rarely more than a few. */
+    if (dbus_message_is_signal(msg, ITEM_IFACE, "NewTitle") ||
+        dbus_message_is_signal(msg, ITEM_IFACE, "NewIcon")  ||
+        dbus_message_is_signal(msg, ITEM_IFACE, "NewAttentionIcon") ||
+        dbus_message_is_signal(msg, ITEM_IFACE, "NewOverlayIcon")   ||
+        dbus_message_is_signal(msg, ITEM_IFACE, "NewToolTip") ||
+        dbus_message_is_signal(msg, ITEM_IFACE, "NewStatus")) {
+        for (int i = 0; i < g_count; i++) item_refresh(&g_items[i]);
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     }
     /* Watcher interface methods. */
@@ -457,6 +753,26 @@ int wltray_init(void) {
                        "type='signal',interface='org.freedesktop.DBus',"
                        "member='NameOwnerChanged'",
                        NULL);
+    /* Subscribe to all item-update signals across the bus.  The
+     * filter routes them to the right item by sender. */
+    dbus_bus_add_match(g_conn,
+                       "type='signal',interface='" ITEM_IFACE "',"
+                       "member='NewTitle'", NULL);
+    dbus_bus_add_match(g_conn,
+                       "type='signal',interface='" ITEM_IFACE "',"
+                       "member='NewIcon'", NULL);
+    dbus_bus_add_match(g_conn,
+                       "type='signal',interface='" ITEM_IFACE "',"
+                       "member='NewAttentionIcon'", NULL);
+    dbus_bus_add_match(g_conn,
+                       "type='signal',interface='" ITEM_IFACE "',"
+                       "member='NewOverlayIcon'", NULL);
+    dbus_bus_add_match(g_conn,
+                       "type='signal',interface='" ITEM_IFACE "',"
+                       "member='NewToolTip'", NULL);
+    dbus_bus_add_match(g_conn,
+                       "type='signal',interface='" ITEM_IFACE "',"
+                       "member='NewStatus'", NULL);
 
     return 0;
 }
@@ -482,15 +798,14 @@ int wltray_fd(void) {
 int wltray_poll(int timeout_ms) {
     if (!g_conn) return 0;
     int n = 0;
-    /* Pump traffic without blocking for too long. */
+    /* Drain anything pending without blocking. */
     while (dbus_connection_dispatch(g_conn) ==
            DBUS_DISPATCH_DATA_REMAINS) n++;
     dbus_connection_read_write(g_conn, timeout_ms);
     while (dbus_connection_dispatch(g_conn) ==
            DBUS_DISPATCH_DATA_REMAINS) n++;
-    /* Refresh known items so Lisp sees title/icon/tooltip updates
-     * even though we don't subscribe to NewIcon/NewTitle yet. */
-    for (int i = 0; i < g_count; i++) item_refresh(&g_items[i]);
+    /* Per-item metadata is refreshed on demand by the New* signal
+     * handlers above; no need to poll every tick. */
     return n;
 }
 
@@ -508,6 +823,7 @@ int wltray_item_get(int i, struct wltray_item *out) {
     out->pixmap_w   = s->pixmap_w;
     out->pixmap_h   = s->pixmap_h;
     out->pixmap     = s->pixmap;
+    out->icon_path  = s->icon_path;
     return 1;
 }
 

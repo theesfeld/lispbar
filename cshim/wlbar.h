@@ -95,6 +95,37 @@ int   wlbar_poll_pointer_event(struct wlbar_pointer_event *out);
  * driving tooltip overlays. */
 int   wlbar_pointer_hover(int *output_idx, double *x, double *y);
 
+/* Tooltip surfaces ------------------------------------------------ */
+/*
+ * Each output gets a secondary layer-shell surface used for tooltip
+ * overlays.  The tooltip surface is created lazily on first show()
+ * and reused thereafter (cheaper than create/destroy on every
+ * hover).  Surfaces are anchored to the same edge the bar uses
+ * (TOP or BOTTOM, configured by wlbar_init) and positioned by
+ * margin.
+ *
+ * Lifecycle:
+ *   wlbar_tooltip_show()    create/resize/move and become visible
+ *   wlbar_tooltip_pixels()  pointer to ARGB32 buffer to paint
+ *   wlbar_tooltip_commit()  push the painted frame
+ *   wlbar_tooltip_hide()    move offscreen + zero buffer
+ */
+
+/* Configure tooltip surface for OUTPUT to WIDTH x HEIGHT at
+ * horizontal position ANCHOR_X (pixels from the output's left edge).
+ * The vertical position is automatic: just below the bar when the
+ * bar is on top, just above when it's on bottom.  Returns 1 if the
+ * surface is ready to paint, 0 on failure or if the configure
+ * roundtrip hasn't completed yet (call again on the next tick). */
+int       wlbar_tooltip_show   (int output, int anchor_x, int width, int height);
+
+uint32_t *wlbar_tooltip_pixels (int output);
+int       wlbar_tooltip_stride (int output);
+int       wlbar_tooltip_width  (int output);
+int       wlbar_tooltip_height (int output);
+void      wlbar_tooltip_commit (int output);
+void      wlbar_tooltip_hide   (int output);
+
 #ifdef __cplusplus
 }
 #endif
