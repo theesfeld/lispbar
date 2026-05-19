@@ -69,7 +69,9 @@ cairo_show_text which has no font fallback or shaping."
 ;;; ---------- wlbar (C shim) FFI ----------
 
 (cffi:defcfun ("wlbar_init"           wlbar-init)         :int
-  (height :int) (position :int))
+  (height :int) (position :int)
+  (margin-top :int) (margin-right :int)
+  (margin-bottom :int) (margin-left :int))
 (cffi:defcfun ("wlbar_shutdown"       wlbar-shutdown)     :void)
 
 (defconstant +wlbar-position-top+    0)
@@ -116,6 +118,19 @@ cairo_show_text which has no font fallback or shaping."
   (cr :pointer) (family :string) (slant :int) (weight :int))
 (cffi:defcfun ("cairo_set_font_size"      cairo-set-font-size)      :void
   (cr :pointer) (size :double))
+(cffi:defcfun ("cairo_set_operator"       cairo-set-operator)       :void
+  (cr :pointer) (op :int))
+(cffi:defcfun ("cairo_new_path"           cairo-new-path)           :void
+  (cr :pointer))
+(cffi:defcfun ("cairo_close_path"         cairo-close-path)         :void
+  (cr :pointer))
+(cffi:defcfun ("cairo_arc"                cairo-arc)                :void
+  (cr :pointer) (xc :double) (yc :double) (r :double)
+  (a1 :double) (a2 :double))
+
+(defconstant +cairo-operator-clear+  0)
+(defconstant +cairo-operator-source+ 1)
+(defconstant +cairo-operator-over+   2)
 
 ;;; cairo_text_extents returns a struct by reference.
 (cffi:defcstruct cairo-text-extents
@@ -170,24 +185,101 @@ cairo_show_text which has no font fallback or shaping."
 (defvar *wayland-font-spec*   "Monospace 11"
   "Pango font description string used by the high-quality text path.")
 
+(defvar *wayland-padding*       12.0d0
+  "Horizontal padding (pixels) inside the bar before the first
+fragment on the left and after the last fragment on the right.")
+(defvar *wayland-module-gap*    12.0d0
+  "Horizontal space (pixels) inserted between adjacent modules.")
+(defvar *wayland-corner-radius* 0.0d0
+  "Corner radius of the bar background (pixels).  0 = sharp corners.")
+
+(defun normalise-margin (value)
+  "Return (top right bottom left) for a config-supplied margin VALUE.
+
+Accepts any of these shapes (mirroring CSS):
+
+  nil             -> 0 0 0 0
+  4               -> 4 4 4 4
+  (4 8)           -> 4 8 4 8                  ; vert horiz
+  (4 8 12)        -> 4 8 12 8                 ; top horiz bottom
+  (4 8 12 16)     -> 4 8 12 16                ; top right bottom left
+
+Also tolerates the QUOTE form that a user might write by mistake
+inside config.lisp - `'(4 8 0 8)' reads as (QUOTE (4 8 0 8))."
+  (let ((v value))
+    (when (and (consp v) (eq (car v) 'quote))
+      (setf v (cadr v)))
+    (cond
+      ((null v)        (values 0 0 0 0))
+      ((numberp v)     (values v v v v))
+      ((and (listp v) (= 2 (length v)))
+       (destructuring-bind (a b) v (values a b a b)))
+      ((and (listp v) (= 3 (length v)))
+       (destructuring-bind (t* h b) v (values t* h b h)))
+      ((and (listp v) (>= (length v) 4))
+       (destructuring-bind (t* r b l &rest _) v
+         (declare (ignore _))
+         (values t* r b l)))
+      (t (values 0 0 0 0)))))
+
 ;;; ---------- Frame rendering ----------
 
 (defun rgba->doubles (c) (mapcar (lambda (v) (coerce v 'double-float)) c))
 
+(defun rounded-rect-path (cr x y w h r)
+  "Append a rounded-rectangle path (X Y W H, corner radius R) to CR."
+  (let* ((x  (coerce x 'double-float))
+         (y  (coerce y 'double-float))
+         (w  (coerce w 'double-float))
+         (h  (coerce h 'double-float))
+         (r  (min (coerce r 'double-float) (/ w 2) (/ h 2)))
+         (p  (coerce pi 'double-float)))
+    (cairo-new-path cr)
+    ;; Top-left corner
+    (cairo-arc cr (+ x r)       (+ y r)       r p              (* 1.5d0 p))
+    ;; Top-right corner
+    (cairo-arc cr (+ x w (- r)) (+ y r)       r (* 1.5d0 p)    (* 2.0d0 p))
+    ;; Bottom-right corner
+    (cairo-arc cr (+ x w (- r)) (+ y h (- r)) r 0.0d0          (* 0.5d0 p))
+    ;; Bottom-left corner
+    (cairo-arc cr (+ x r)       (+ y h (- r)) r (* 0.5d0 p)    p)
+    (cairo-close-path cr)))
+
+(defun paint-background (cr w h)
+  "Clear surface to transparent then paint the bar background, honouring
+*WAYLAND-CORNER-RADIUS*."
+  (cairo-set-operator cr +cairo-operator-source+)
+  (cairo-set-source-rgba cr 0.0d0 0.0d0 0.0d0 0.0d0)
+  (cairo-paint cr)
+  (cairo-set-operator cr +cairo-operator-over+)
+  (apply #'cairo-set-source-rgba cr (rgba->doubles (theme-color :bg)))
+  (cond
+    ((plusp *wayland-corner-radius*)
+     (rounded-rect-path cr 0 0 w h *wayland-corner-radius*)
+     (cairo-fill cr))
+    (t
+     (cairo-paint cr))))
+
 ;; Cairo (toy) path -----------------------------------------------
 
 (defun cairo-fragment-list-width (cr fragments)
-  (loop for (text _) in fragments sum (cairo-text-width cr text)))
+  (loop for f in fragments
+        if (fragment-gap-p f) sum *wayland-module-gap*
+        else                  sum (cairo-text-width cr (first f))))
 
 (defun cairo-draw-fragments (cr fragments x baseline)
   (let ((pen (coerce x 'double-float)))
     (dolist (f fragments)
-      (let ((text (first f)) (face (second f)))
-        (apply #'cairo-set-source-rgba cr
-               (rgba->doubles (theme-color face)))
-        (cairo-move-to cr pen baseline)
-        (cairo-show-text cr text)
-        (incf pen (cairo-text-width cr text))))
+      (cond
+        ((fragment-gap-p f)
+         (incf pen *wayland-module-gap*))
+        (t
+         (let ((text (first f)) (face (second f)))
+           (apply #'cairo-set-source-rgba cr
+                  (rgba->doubles (theme-color face)))
+           (cairo-move-to cr pen baseline)
+           (cairo-show-text cr text)
+           (incf pen (cairo-text-width cr text))))))
     pen))
 
 ;; Pango path -----------------------------------------------------
@@ -197,8 +289,9 @@ cairo_show_text which has no font fallback or shaping."
         (fd     (pango-fd-from-string *wayland-font-spec*)))
     (unwind-protect
          (progn (pango-layout-set-fd layout fd)
-                (loop for (text _) in fragments
-                      sum (pango-text-width layout text)))
+                (loop for f in fragments
+                      if (fragment-gap-p f) sum *wayland-module-gap*
+                      else                  sum (pango-text-width layout (first f))))
       (pango-fd-free fd)
       (g-object-unref layout))))
 
@@ -209,13 +302,17 @@ cairo_show_text which has no font fallback or shaping."
     (unwind-protect
          (progn (pango-layout-set-fd layout fd)
                 (dolist (f fragments)
-                  (let ((text (first f)) (face (second f)))
-                    (apply #'cairo-set-source-rgba cr
-                           (rgba->doubles (theme-color face)))
-                    (cairo-move-to cr pen y-top)
-                    (pango-layout-set-text layout text -1)
-                    (pango-cairo-show-layout cr layout)
-                    (incf pen (pango-text-width layout text)))))
+                  (cond
+                    ((fragment-gap-p f)
+                     (incf pen *wayland-module-gap*))
+                    (t
+                     (let ((text (first f)) (face (second f)))
+                       (apply #'cairo-set-source-rgba cr
+                              (rgba->doubles (theme-color face)))
+                       (cairo-move-to cr pen y-top)
+                       (pango-layout-set-text layout text -1)
+                       (pango-cairo-show-layout cr layout)
+                       (incf pen (pango-text-width layout text)))))))
       (pango-fd-free fd)
       (g-object-unref layout))
     pen))
@@ -247,9 +344,7 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
            (cr   (cairo-create surf)))
       (unwind-protect
            (progn
-             (apply #'cairo-set-source-rgba cr
-                    (rgba->doubles (theme-color :bg)))
-             (cairo-paint cr)
+             (paint-background cr w h)
              (unless *have-pango*
                (cairo-select-font-face cr *wayland-font-family* 0 0)
                (cairo-set-font-size cr *wayland-font-size*))
@@ -259,7 +354,7 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
                              (collect-modules-for :center instances)))
                     (right  (module-fragments
                              (collect-modules-for :right  instances)))
-                    (pad 12.0d0)
+                    (pad *wayland-padding*)
                     ;; Pango: top-left coords; cairo: baseline.
                     (ypos (if *have-pango*
                               (/ (- h (* *wayland-font-size* 1.4)) 2.0)
@@ -294,14 +389,22 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
   (apply-theme (getf config :theme))
   (when (getf config :font)
     (setf *wayland-font-spec* (getf config :font)))
+  (when (getf config :padding)
+    (setf *wayland-padding* (coerce (getf config :padding) 'double-float)))
+  (when (getf config :gap)
+    (setf *wayland-module-gap* (coerce (getf config :gap) 'double-float)))
+  (when (getf config :corner-radius)
+    (setf *wayland-corner-radius*
+          (coerce (getf config :corner-radius) 'double-float)))
 
-  (let* ((height   (or (getf config :height) 28))
-         (position (position->c (getf config :position)))
-         (rc       (wlbar-init height position)))
-    (when (< rc 0)
-      (logmsg :error "wlbar_init failed; falling back to :stdout")
-      (run-stdout config)
-      (return-from run-wayland)))
+  (multiple-value-bind (mt mr mb ml) (normalise-margin (getf config :margin))
+    (let* ((height   (or (getf config :height) 28))
+           (position (position->c (getf config :position)))
+           (rc       (wlbar-init height position mt mr mb ml)))
+      (when (< rc 0)
+        (logmsg :error "wlbar_init failed; falling back to :stdout")
+        (run-stdout config)
+        (return-from run-wayland))))
 
   (unwind-protect
        (let ((instances (build-instances config))

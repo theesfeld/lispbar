@@ -115,13 +115,17 @@ binary on startup.  Every form is one of:
 (placement :center (:media))
 (placement :right  (:cpu :memory :audio :bluetooth :brightness :battery :clock))
 
-(position :top)                 ; :top | :bottom
-(height   28)                   ; bar height in pixels
-(font     "Sans Bold 11")       ; Pango font description
-(theme    :nordish)             ; or any registered theme
-(tick     1.0)                  ; refresh interval in seconds
-(output   :wayland)             ; :wayland :stdout :json
-(log-level :info)               ; :debug :info :warn :error
+(position      :top)            ; :top | :bottom
+(height        28)              ; bar height in pixels
+(margin        8 12 0 12)       ; CSS-style: top right bottom left
+(padding       12)              ; inside the bar, left + right edges
+(gap           12)              ; horizontal space between modules
+(corner-radius 12)              ; rounded background; 0 = sharp
+(font          "Sans Bold 11")  ; Pango font description
+(theme         :nordish)        ; or any registered theme
+(tick          1.0)             ; refresh interval in seconds
+(output        :wayland)        ; :wayland :stdout :json
+(log-level     :info)           ; :debug :info :warn :error
 ```
 
 Forms are evaluated top-to-bottom; later forms override earlier ones.

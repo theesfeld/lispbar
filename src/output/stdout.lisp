@@ -22,25 +22,39 @@ priority descending."
     (sort subset #'> :key #'module-priority)))
 
 (defun module-fragments (modules)
-  "Return a flat list of (TEXT FACE) pairs for MODULES, dropping empty ones.
-Modules that report multiple fragments contribute all of them in
-order; a space fragment is inserted between modules."
+  "Return a flat list of fragments for MODULES, dropping empty ones.
+
+Each fragment is one of:
+
+  (TEXT FACE)    a string painted in FACE.
+  (:gap PIXELS)  pixel gap between adjacent modules.  Text drivers
+                 (stdout / json) translate this to a single space;
+                 the Wayland renderer advances the pen by PIXELS.
+
+Modules that report multiple sub-fragments contribute all of them in
+order; an inter-module gap fragment is inserted between them."
   (loop with result = nil
         with first = t
         for m in modules
         for v = (module-output m)
         for frags = (module-output-fragments v)
         when frags do
-          (unless first (push (list " " :normal) result))
+          (unless first (push (list :gap nil) result))
           (setf first nil)
           (dolist (f frags) (push f result))
         finally (return (nreverse result))))
 
+(defun fragment-gap-p (f) (and (consp f) (eq (first f) :gap)))
+
 (defun render-section (modules)
   "Render a list of MODULES into a single concatenated string.
-Faces are discarded (the stdout / JSON drivers are plain text);
-the fragment list already carries its own space separators."
-  (format nil "~{~a~}" (mapcar #'first (module-fragments modules))))
+Faces are discarded; gap fragments collapse to a single space - the
+stdout and JSON drivers are plain text and don't have a notion of
+pixel spacing."
+  (with-output-to-string (s)
+    (dolist (f (module-fragments modules))
+      (cond ((fragment-gap-p f) (write-char #\Space s))
+            (t                  (write-string (first f) s))))))
 
 (defun render-text-line (instances)
   "Compose the LEFT | CENTER | RIGHT line."
