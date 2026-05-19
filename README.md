@@ -227,7 +227,7 @@ the Wayland wire format by hand.
 ## Layout
 
 ```
-native/
+.
 ├── lispbar.asd                ASDF system (depends on cffi)
 ├── build.lisp                 sb-ext:save-lisp-and-die driver
 ├── Makefile                   make build / install / test
@@ -241,7 +241,9 @@ native/
 ├── src/
 │   ├── package.lisp           Common Lisp package
 │   ├── log.lisp               stderr logger
-│   ├── config.lisp            config DSL loader
+│   ├── xdg.lisp               XDG Base Directory helpers
+│   ├── theme.lisp             theme registry + define-theme + built-ins
+│   ├── config.lisp            config DSL loader + extension discovery
 │   ├── module.lisp            defmodule macro + registry + faces
 │   ├── modules/               clock, workspaces, media, cpu, memory,
 │   │                          battery, audio, bluetooth, brightness
@@ -249,7 +251,10 @@ native/
 │   │   ├── stdout.lisp        text + JSON drivers
 │   │   └── wayland.lisp       layer-shell driver
 │   └── main.lisp              entry, arg parsing, signal handlers
-└── examples/config.lisp
+└── examples/
+    ├── config.lisp
+    ├── modules/loadavg.lisp
+    └── themes/dracula.lisp
 ```
 
 ## License

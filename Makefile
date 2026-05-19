@@ -1,97 +1,48 @@
-# Makefile for lispbar
+SBCL ?= sbcl
+PREFIX ?= /usr/local
 
-EMACS ?= emacs
-BATCH = $(EMACS) -Q --batch
+.PHONY: all build shim install uninstall clean run test
 
-# Source files.  Backend modules MUST be compiled before backends
-# and before lispbar-core, since core requires lispbar-backend at
-# load time.  `lispbar-backend-exwm.el' depends on lispbar-exwm.el.
-EL_SOURCES = lispbar-backend.el \
-	lispbar-backend-wayland.el \
-	lispbar-exwm.el \
-	lispbar-backend-exwm.el \
-	lispbar-core.el \
-	lispbar-modules.el \
-	lispbar-render.el \
-	lispbar.el \
-	$(wildcard modules/*.el)
+all: build
 
-# Compiled files
-ELC_FILES = $(EL_SOURCES:.el=.elc)
+shim:
+	$(MAKE) -C cshim
 
-# Test files
-TEST_FILES = $(wildcard test/*-test.el)
+build: shim lispbar
 
-.PHONY: all compile test lint clean package install
+lispbar: $(wildcard src/*.lisp src/modules/*.lisp src/output/*.lisp) \
+         lispbar.asd build.lisp cshim/libwlbar.so
+	LD_LIBRARY_PATH=$(CURDIR)/cshim:$$LD_LIBRARY_PATH \
+	  $(SBCL) --non-interactive --load build.lisp
 
-all: compile
-
-compile: $(ELC_FILES)
-
-%.elc: %.el
-	@echo "Compiling $<..."
-	@$(BATCH) -f batch-byte-compile $<
-
-test: compile
-	@echo "Running tests..."
-	@$(BATCH) -L . -L test \
-		-l test/test-helper \
-		$(foreach test,$(TEST_FILES),-l $(test)) \
-		-f ert-run-tests-batch-and-exit
-
-lint:
-	@echo "Running package-lint..."
-	@$(BATCH) -L . \
-		--eval "(require 'package)" \
-		--eval "(package-initialize)" \
-		--eval "(unless (package-installed-p 'package-lint) (package-refresh-contents) (package-install 'package-lint))" \
-		-f package-lint-batch-and-exit $(EL_SOURCES)
-
-checkdoc:
-	@echo "Running checkdoc..."
-	@$(BATCH) -L . \
-		--eval "(checkdoc-file \"lispbar.el\")" \
-		--eval "(checkdoc-file \"lispbar-core.el\")"
-
-clean:
-	@echo "Cleaning..."
-	@rm -f $(ELC_FILES)
-	@rm -f *~ \#*\#
-	@rm -f test/*~ test/\#*\#
-
-package: clean
-	@echo "Creating package..."
-	@mkdir -p dist
-	@tar -cf dist/lispbar-$(VERSION).tar --exclude=.git --exclude=dist .
-
-install: compile
-	@echo "Installing locally..."
-	@mkdir -p ~/.emacs.d/site-lisp/lispbar
-	@cp -r *.el *.elc modules ~/.emacs.d/site-lisp/lispbar/
+install: build
+	install -Dm755 lispbar           $(DESTDIR)$(PREFIX)/bin/lispbar
+	install -Dm755 cshim/libwlbar.so $(DESTDIR)$(PREFIX)/lib/lispbar/libwlbar.so
+	install -Dm644 examples/config.lisp \
+	  $(DESTDIR)$(PREFIX)/share/lispbar/example-config.lisp
+	install -Dm644 examples/modules/loadavg.lisp \
+	  $(DESTDIR)$(PREFIX)/share/lispbar/examples/modules/loadavg.lisp
+	install -Dm644 examples/themes/dracula.lisp \
+	  $(DESTDIR)$(PREFIX)/share/lispbar/examples/themes/dracula.lisp
+	install -Dm644 systemd/lispbar.service \
+	  $(DESTDIR)$(PREFIX)/lib/systemd/user/lispbar.service
 
 uninstall:
-	@echo "Uninstalling..."
-	@rm -rf ~/.emacs.d/site-lisp/lispbar
+	rm -f $(DESTDIR)$(PREFIX)/bin/lispbar
+	rm -f $(DESTDIR)$(PREFIX)/lib/lispbar/libwlbar.so
+	rm -rf $(DESTDIR)$(PREFIX)/share/lispbar
+	rm -f $(DESTDIR)$(PREFIX)/lib/systemd/user/lispbar.service
 
-# Development helpers
-autoloads:
-	@echo "Generating autoloads..."
-	@$(BATCH) --eval "(require 'autoload)" \
-		--eval "(let ((generated-autoload-file \"$(PWD)/lispbar-autoloads.el\")) \
-			  (update-directory-autoloads \"$(PWD)\"))"
+run: build
+	LD_LIBRARY_PATH=$(CURDIR)/cshim:$$LD_LIBRARY_PATH ./lispbar
 
-check: compile lint checkdoc test
-	@echo "All checks passed!"
+test: build
+	./lispbar --list-modules
+	./lispbar --once --output stdout
+	./lispbar --once --output json
 
-# CI targets
-ci-test: clean compile test
-
-ci-lint: lint checkdoc
-
-# Version management
-VERSION = $(shell grep "^;; Version:" lispbar.el | cut -d' ' -f3)
-
-tag-release:
-	@echo "Tagging version $(VERSION)..."
-	@git tag -a "v$(VERSION)" -m "Release version $(VERSION)"
-	@echo "Don't forget to push tags: git push origin v$(VERSION)"
+clean:
+	rm -f lispbar
+	find . -name '*.fasl' -delete
+	$(MAKE) -C cshim clean
+	rm -rf ~/.cache/common-lisp/*/$(PWD) 2>/dev/null || true
