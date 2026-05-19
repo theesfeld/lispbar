@@ -80,6 +80,47 @@ log level.
 .TP
 .BR \-h ", " \-\-help
 Print short usage and exit.
+.SH SUBCOMMANDS
+.TP
+.B registry \fISUBCMD\fR " " [\fIOPTIONS\fR]
+Browse and install community-contributed modules and themes from the
+official upstream registry (curated by the project, fetched live from
+.IR https://github.com/theesfeld/lispbar/tree/master/registry ).
+.I SUBCMD
+is one of:
+.RS
+.IP "\fBlist\fR [\fB--kind\fR \fImodule|theme\fR]" 4
+List every item in the registry.  Items already installed are marked
+with
+.BR * .
+.IP "\fBinfo\fR \fINAME\fR" 4
+Show metadata for one item:  source URL, SHA-256, author, runtime
+dependencies, and install status.
+.IP "\fBinstall\fR \fINAME\fR" 4
+Download
+.I NAME
+from the registry, verify its SHA-256 against the manifest, and place
+it under
+.I $XDG_CONFIG_HOME/lispbar/modules/
+or
+.IR themes/ .
+.IP "\fBremove\fR \fINAME\fR" 4
+Delete an installed item and forget it in the bookkeeping.
+.IP "\fBupdate\fR" 4
+Refresh every installed item.  Re-downloads any whose SHA-256 has
+changed in the upstream manifest.
+.PP
+.I NAME
+is a keyword like
+.BR :weather " or " :tokyo-night .
+The leading colon is optional on the command line.  Global flags such
+as
+.B \-c
+and
+.B \-v
+may appear on either side of
+.BR registry .
+.RE
 .SH ENVIRONMENT
 .TP
 .B WAYLAND_DISPLAY
@@ -138,6 +179,22 @@ User-defined themes.  See
 .TP
 .IR $XDG_CACHE_HOME/lispbar/icons/
 SVG-to-PNG conversion cache for tray icons.  Safe to delete.
+.TP
+.IR $XDG_CACHE_HOME/lispbar/registry-manifest.lisp
+Cached copy of the registry manifest.  Refreshed by the
+.B registry
+subcommand when older than
+.BR *registry-cache-ttl* .
+.TP
+.IR $XDG_STATE_HOME/lispbar/registry-installed.lisp
+Bookkeeping for items installed via
+.BR "lispbar registry install" .
+Rewritten on every install/remove; safe to delete (you'll lose the
+ability to
+.B registry update
+or
+.B remove
+items but the files themselves stay put).
 .TP
 .I @PREFIX@/share/lispbar/examples/
 Example user config and example user module/theme files.

@@ -1,0 +1,28 @@
+name: Registry validation
+
+on:
+  pull_request:
+    paths:
+      - 'registry/**'
+      - 'tools/registry-*'
+      - '.github/workflows/registry.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'registry/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SBCL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sbcl
+
+      - name: Validate registry
+        run: |
+          chmod +x tools/registry-validate.sh
+          ./tools/registry-validate.sh

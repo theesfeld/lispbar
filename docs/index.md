@@ -11,6 +11,8 @@ Native Wayland status bar in Common Lisp.
 
 * [Modules](modules.md) — built-in module reference and authoring guide
 * [Themes](themes.md) — built-in palettes and theme authoring guide
+* [Registry](registry.md) — install community modules and themes
+  with `lispbar registry …`
 
 ## When something breaks
 
@@ -33,6 +35,10 @@ lispbar --list-themes
 lispbar --print-paths         # XDG resolution
 lispbar --show-extensions     # loaded user .lisp files
 lispbar --help
+
+lispbar registry list                # browse community modules / themes
+lispbar registry install :weather    # download + verify into ~/.config
+lispbar registry update              # refresh installed items
 ```
 
 ```

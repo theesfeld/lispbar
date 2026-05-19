@@ -34,4 +34,5 @@
                  (:module "output"
                   :components ((:file "stdout")
                                (:file "wayland")))
+                 (:file "registry-client")
                  (:file "main")))))

@@ -19,6 +19,11 @@
       --print-paths      Print XDG path discovery and exit
   -v, --verbose          Enable debug logging
   -h, --help             Show this help and exit
+
+Subcommands:
+  registry SUBCMD [...]  Browse and install from the official module /
+                         theme registry.  `lispbar registry help' for
+                         usage.
 ")
 
 (defun parse-args (argv)
@@ -120,8 +125,43 @@
        (format *error-output* "lispbar: --init failed (see warnings above)~%")
        1))))
 
+(defun split-subcommand (argv name)
+  "Walk ARGV.  If NAME appears as the first non-flag positional, return
+   (VALUES T GLOBAL-FLAGS SUB-ARGS) where GLOBAL-FLAGS are the args
+   before NAME and SUB-ARGS are the args after.  Returns (VALUES NIL …)
+   if NAME is not the first positional, so global flags can appear on
+   either side: `lispbar -v -c CFG registry install :weather' works."
+  (loop with rest = argv
+        with before = nil
+        while rest
+        for a = (pop rest) do
+          (cond
+            ;; Flags that consume the next arg as their value.
+            ((or (string= a "-c") (string= a "--config")
+                 (string= a "-o") (string= a "--output"))
+             (push a before)
+             (when rest (push (pop rest) before)))
+            ;; Standalone flags — skip and keep looking.
+            ((and (>= (length a) 1) (char= (char a 0) #\-))
+             (push a before))
+            ;; First positional: is it our subcommand?
+            ((string= a name)
+             (return (values t (nreverse before) rest)))
+            ;; Some other positional first — not us.
+            (t (return (values nil nil nil))))
+        finally (return (values nil nil nil))))
+
 (defun main (&optional (argv (uiop:command-line-arguments)))
   "Native Lispbar entry point.  Returns an integer exit code."
+  ;; `lispbar registry …' branches early; it has its own arg parser,
+  ;; but it shares the global flags so `-c CFG' and `-v' still apply.
+  (multiple-value-bind (found global-flags sub-args)
+      (split-subcommand argv "registry")
+    (when found
+      (let ((opts (parse-args global-flags)))
+        (when (getf opts :verbose) (setf *log-level* :debug))
+        (return-from main (do-registry sub-args
+                                       :config (getf opts :config))))))
   (let ((opts (parse-args argv)))
     (when (getf opts :verbose) (setf *log-level* :debug))
     (when (getf opts :no-seed) (setf *seed-disabled* t))
