@@ -231,8 +231,22 @@ static void pointer_button(void *_d, struct wl_pointer *_p,
     g_event_head = next;
 }
 static void pointer_axis(void *_d, struct wl_pointer *_p, uint32_t _t,
-                         uint32_t _axis, wl_fixed_t _v) {
-    (void)_d;(void)_p;(void)_t;(void)_axis;(void)_v;
+                         uint32_t axis, wl_fixed_t value) {
+    (void)_d;(void)_p;(void)_t;
+    /* We only handle the vertical scroll axis for now. */
+    if (axis != 0 /* WL_POINTER_AXIS_VERTICAL_SCROLL */) return;
+    if (g_pointer_output < 0) return;
+    int next = (g_event_head + 1) % EVENT_QUEUE_SIZE;
+    if (next == g_event_tail) return;
+    double v = wl_fixed_to_double(value);
+    /* X11 convention: button 4 = wheel up (negative scroll value),
+     * button 5 = wheel down (positive scroll value). */
+    g_events[g_event_head].output_idx = g_pointer_output;
+    g_events[g_event_head].x          = g_pointer_x;
+    g_events[g_event_head].y          = g_pointer_y;
+    g_events[g_event_head].button     = (v < 0.0) ? 4 : 5;
+    g_events[g_event_head].pressed    = 1;
+    g_event_head = next;
 }
 static void pointer_frame(void *_d, struct wl_pointer *_p) {(void)_d;(void)_p;}
 static void pointer_axis_source(void *_d, struct wl_pointer *_p, uint32_t _s) {

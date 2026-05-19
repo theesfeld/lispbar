@@ -26,8 +26,35 @@
                 (when (and c m (plusp m))
                   (round (* 100 (/ c m))))))))))))
 
-(defmodule :brightness (:doc "Backlight percentage."
-                        :position :right :priority 45 :interval 10.0)
+(defvar *brightness-step* 5
+  "Brightness change per scroll tick (percentage points).")
+
+(defvar *brightness-on-click* nil
+  "Optional shell command for left-click of the brightness module.
+NIL means no action (most users prefer scroll-wheel control).")
+
+(defun brightness-scroll (_d button &rest _)
+  (declare (ignore _ _d))
+  (when (executable-find-check "brightnessctl")
+    (let ((arg (case button
+                 (:scroll-up   (format nil "+~d%" *brightness-step*))
+                 (:scroll-down (format nil "~d%-" *brightness-step*)))))
+      (when arg
+        (handler-case
+            (uiop:launch-program (list "brightnessctl" "set" arg))
+          (error (e) (logmsg :warn "brightness scroll failed: ~a" e)))))))
+
+(defun brightness-left-click (_m _b _i)
+  (declare (ignore _m _b _i))
+  (when (and *brightness-on-click* (plusp (length *brightness-on-click*)))
+    (uiop:launch-program (list "sh" "-c" *brightness-on-click*))))
+
+(defmodule :brightness
+  (:doc "Backlight percentage.  Scroll to change."
+   :position :right :priority 45 :interval 10.0
+   :on-click ((:left        brightness-left-click)
+              (:scroll-up   brightness-scroll)
+              (:scroll-down brightness-scroll)))
   (let ((pct (or (brightness-via-brightnessctl)
                  (brightness-via-sysfs))))
     (and pct (format nil "BRT ~d%" pct))))

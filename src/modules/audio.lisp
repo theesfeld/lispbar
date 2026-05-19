@@ -2,17 +2,7 @@
 
 (in-package #:lispbar)
 
-(defun run-capture (program &rest args)
-  "Run PROGRAM with ARGS, returning its stdout string on success, NIL on
-non-zero exit or missing binary."
-  (handler-case
-      (multiple-value-bind (out err code)
-          (uiop:run-program (cons program args)
-                            :output :string :error-output nil
-                            :ignore-error-status t)
-        (declare (ignore err))
-        (and (eql code 0) out))
-    (error () nil)))
+;; run-capture and executable-find-check are defined in module.lisp.
 
 (defun audio-via-wpctl ()
   (let ((out (run-capture "wpctl" "get-volume" "@DEFAULT_AUDIO_SINK@")))
@@ -60,6 +50,27 @@ non-zero exit or missing binary."
   (when (and *audio-on-middle-click* (plusp (length *audio-on-middle-click*)))
     (uiop:launch-program (list "sh" "-c" *audio-on-middle-click*))))
 
+(defvar *audio-scroll-step* 5
+  "Volume change per scroll tick (percentage points).")
+
+(defun audio-scroll (_m button _i)
+  (declare (ignore _m _i))
+  (let ((up (eq button :scroll-up)))
+    (cond
+      ((executable-find-check "wpctl")
+       (uiop:launch-program
+        (list "wpctl" "set-volume" "@DEFAULT_AUDIO_SINK@"
+              (format nil "~d%~a" *audio-scroll-step* (if up "+" "-")))))
+      ((executable-find-check "pactl")
+       (uiop:launch-program
+        (list "pactl" "set-sink-volume" "@DEFAULT_SINK@"
+              (format nil "~a~d%" (if up "+" "-") *audio-scroll-step*))))
+      ((executable-find-check "amixer")
+       (uiop:launch-program
+        (list "amixer" "set" "Master"
+              (format nil "~d%~a" *audio-scroll-step* (if up "+" "-"))))))))
+
+
 (defun audio-tooltip ()
   "Long-form audio state for the hover tooltip."
   (let ((s (or (audio-via-wpctl) (audio-via-pactl))))
@@ -69,10 +80,13 @@ non-zero exit or missing binary."
       (t (format nil "Volume ~d%   left-click: mixer   middle-click: mute"
                  (getf s :volume))))))
 
-(defmodule :audio (:doc "Volume + mute state of default sink."
+(defmodule :audio (:doc "Volume + mute state of default sink.
+Scroll to adjust volume."
                    :position :right :priority 65 :interval 2.0
-                   :on-click ((:left   audio-left-click)
-                              (:middle audio-middle-click))
+                   :on-click ((:left        audio-left-click)
+                              (:middle      audio-middle-click)
+                              (:scroll-up   audio-scroll)
+                              (:scroll-down audio-scroll))
                    :tooltip  audio-tooltip)
   (let ((s (or (audio-via-wpctl) (audio-via-pactl))))
     (when s

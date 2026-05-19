@@ -46,6 +46,16 @@ order; an inter-module gap fragment is inserted between them."
 
 (defun fragment-gap-p (f) (and (consp f) (eq (first f) :gap)))
 
+(defun fragment-clickable-p (f)
+  "T when F is a clickable fragment of the form
+   (:clickable :text TEXT :face FACE :on-click HANDLER :data DATA)."
+  (and (consp f) (eq (first f) :clickable)))
+
+(defun clickable-text     (f) (getf (rest f) :text))
+(defun clickable-face     (f) (or (getf (rest f) :face) :normal))
+(defun clickable-handler  (f) (getf (rest f) :on-click))
+(defun clickable-data     (f) (getf (rest f) :data))
+
 (defun render-section (modules)
   "Render a list of MODULES into a single concatenated string.
 Faces are discarded; gap fragments collapse to a single space - the
@@ -53,8 +63,9 @@ stdout and JSON drivers are plain text and don't have a notion of
 pixel spacing."
   (with-output-to-string (s)
     (dolist (f (module-fragments modules))
-      (cond ((fragment-gap-p f) (write-char #\Space s))
-            (t                  (write-string (first f) s))))))
+      (cond ((fragment-gap-p f)       (write-char   #\Space s))
+            ((fragment-clickable-p f) (write-string (clickable-text f) s))
+            (t                        (write-string (first f) s))))))
 
 (defun render-text-line (instances)
   "Compose the LEFT | CENTER | RIGHT line."

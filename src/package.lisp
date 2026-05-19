@@ -62,6 +62,8 @@
    ;; Click dispatch (for users writing their own modules)
    #:module-on-click #:dispatch-module-click #:run-module-action
    #:button->key #:*click-x* #:*click-output*
+   #:record-subfragment #:reset-subfragments
+   #:run-subfragment-action #:subfragment-at-x
 
    ;; Tooltips
    #:module-tooltip #:resolve-tooltip
