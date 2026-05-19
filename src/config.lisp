@@ -158,6 +158,9 @@ the next file (one broken module never stops the bar from booting)."
 
 ;;; ---- Config loading ----
 
+(defvar *seed-disabled* nil
+  "Bound by `main' when the user passes --no-seed.")
+
 (defun seeding-disabled-p ()
   "Return non-nil when first-run seeding should be skipped, either
 because the user set $LISPBAR_NO_SEED or because we're running with
@@ -165,9 +168,6 @@ the `--no-seed' CLI flag (caller sets `*seed-disabled*' in that case)."
   (or *seed-disabled*
       (let ((v (uiop:getenv "LISPBAR_NO_SEED")))
         (and v (plusp (length v))))))
-
-(defvar *seed-disabled* nil
-  "Bound by `main' when the user passes --no-seed.")
 
 (defun load-config (&optional path)
   "Load extensions, then read PATH (or the first XDG-discovered
