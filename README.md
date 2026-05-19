@@ -1,214 +1,113 @@
-# lispbar (native)
+# lispbar
 
-A standalone Wayland status bar implemented in Common Lisp.
+A native Wayland status bar written in Common Lisp.
 
-This is what the compositor spawns. It is to lispbar what waybar is
-to its config file — a real binary with a configuration file at
-`~/.config/lispbar/config.lisp`, not an Emacs plugin.
+The deliverable is a single SBCL-compiled binary, ~12 MB, ~110 ms
+cold start.  It's a real `wlr-layer-shell` client — same protocol
+waybar uses — driven by configuration in Lisp.
 
-## Build
-
-```sh
-make build              # produces ./lispbar (12 MB, self-contained)
-sudo make install       # see "Install" below
+```
+[1] 2 3                      ▶ Artist — Title             ⚡ 87% 󰘎 60% MEM 4% 5G ▆▆▆░ 12:42
 ```
 
-Requirements:
+## What it gives you
 
-| Required                       | Purpose                                 |
-| ------------------------------ | --------------------------------------- |
-| SBCL ≥ 2.0 + Quicklisp (CFFI)  | builds the binary                       |
-| libwayland-client              | talks to the compositor                 |
-| wayland-protocols + scanner    | code-generates the layer-shell glue     |
-| libcairo                       | pixel rendering                         |
-| libpangocairo, libpango (opt.) | proper text shaping / font fallback     |
+| | |
+| -------- | ----------------------------------------------------------- |
+| 11 built-in modules | clock, workspaces, media, cpu, memory, battery, audio, network, bluetooth, brightness, tray, launcher |
+| 6 themes | adaptive, minimal, nordish, gruvboxish, catppuccinish, doomish |
+| 3 output drivers | native Wayland, plain stdout (testing), waybar-style JSON (custom-module driver) |
+| Click handling | per-module + **per-fragment** (each workspace number is independently clickable) — left / right / middle / scroll / hover |
+| Wayland features | wlr-layer-shell, multi-output (one surface per monitor), floating tooltip surface, optional Pango font shaping |
+| Tray | full StatusNotifierItem D-Bus host, with icon-theme resolution and SVG → PNG via librsvg |
+| Compositors | Sway, Hyprland, niri (workspaces); any other wlroots compositor for the bar itself |
+| Init systems | systemd, runit, OpenRC (compositor `exec` works everywhere) |
 
-The binary is built once on your machine and runs anywhere that has
-those shared libraries available — there's no Lisp dependency on the
-target host because SBCL's runtime is embedded.
-
-## Install
-
-`make install` honours the standard `PREFIX` (default `/usr/local`)
-and `DESTDIR` (default empty) variables.  Init-system integration
-is auto-detected; override with `INIT=`:
+## Quick start
 
 ```sh
-sudo make install                       # auto-detect (systemd | runit | openrc)
-sudo make install INIT=systemd
-sudo make install INIT=runit
-sudo make install INIT=openrc           # no init wiring; uses compositor exec
-sudo make install PREFIX=/usr           # distribution-style prefix
-make install PREFIX=$HOME/.local        # user-local prefix
+git clone https://github.com/theesfeld/lispbar
+cd lispbar
+make build
+sudo make install               # auto-detects init system
+# add `exec lispbar` to ~/.config/sway/config       (Sway)
+# or  `exec-once = lispbar`     to ~/.config/hypr/hyprland.conf
+# or  systemctl --user enable --now lispbar         (systemd)
 ```
 
-What gets installed:
-
-| File                                                                | Source                          |
-| ------------------------------------------------------------------- | ------------------------------- |
-| `$PREFIX/bin/lispbar`                                               | the binary                      |
-| `$PREFIX/lib/lispbar/libwlbar.so`                                   | Wayland C shim                  |
-| `$PREFIX/share/lispbar/examples/config.lisp`                        | starter config                  |
-| `$PREFIX/share/lispbar/examples/modules/loadavg.lisp`               | example user module             |
-| `$PREFIX/share/lispbar/examples/themes/dracula.lisp`                | example user theme              |
-| `$PREFIX/share/lispbar/init/systemd/lispbar.service`                | systemd user unit (reference)   |
-| `$PREFIX/share/lispbar/init/runit/lispbar/run`                      | runit service (reference)       |
-| `$PREFIX/share/lispbar/init/openrc/README.md`                       | OpenRC integration notes        |
-| `$PREFIX/share/doc/lispbar/{README.md,LICENSE}`                     | docs                            |
-| `$PREFIX/lib/systemd/user/lispbar.service`                          | only when `INIT=systemd`        |
-
-`make uninstall` removes every file `make install` placed.  User
-config under `$XDG_CONFIG_HOME/lispbar/` is **not** touched.
-
-### Init-system integration
-
-Depending on your init system, choose one of:
-
-| Init     | How Lispbar starts                                                              |
-| -------- | ------------------------------------------------------------------------------- |
-| systemd  | `systemctl --user enable --now lispbar`                                         |
-| runit    | `ln -s $PREFIX/share/lispbar/init/runit/lispbar ~/runit/service/`               |
-| OpenRC   | `exec lispbar` in `~/.config/sway/config` (or `exec-once = lispbar` for Hyprland) |
-| anything | `exec lispbar` in your compositor config always works                           |
-
-OpenRC users: see `$PREFIX/share/lispbar/init/openrc/README.md`
-for the rationale.  TL;DR — OpenRC is a system-level supervisor;
-graphical user-session bars are started by the compositor on every
-init system, OpenRC included.
-
-## Use
+On first launch lispbar creates `~/.config/lispbar/`
+(`config.lisp` + empty `modules/` and `themes/` dirs) so you have
+a starting point without any manual `cp`.
 
 ```sh
-./lispbar                       # streams forever, picks driver from config
-./lispbar --once                # one frame to stdout (handy for scripts)
-./lispbar --output json         # waybar-compatible JSON per tick
-./lispbar --init                # seed ~/.config/lispbar/ explicitly
-./lispbar --list-modules        # registry inventory
-./lispbar --list-themes         # theme registry
-./lispbar --print-paths         # XDG path resolution
-./lispbar --show-extensions     # which user files got loaded
-./lispbar --help
+lispbar --help               # CLI flags
+lispbar --list-modules       # registry inventory
+lispbar --print-paths        # XDG resolution
+lispbar --show-extensions    # which user files got loaded
 ```
 
-### First run
-
-On the first launch, if no config exists anywhere in the XDG search
-path, Lispbar creates `$XDG_CONFIG_HOME/lispbar/`, drops a starter
-`config.lisp` (the same one in `examples/config.lisp`), and creates
-empty `modules/` and `themes/` directories so you know where to put
-your own extensions.  The bar then boots from that fresh config -
-no manual `cp` required.
-
-To turn this off (e.g. on a server / staged image where you'll ship
-the config separately), pass `--no-seed` or set
-`LISPBAR_NO_SEED=1` in the environment.  To re-seed an existing
-config explicitly, `lispbar --init --force`.
-
-### Configuration
-
-`$XDG_CONFIG_HOME/lispbar/config.lisp` (defaulting to
-`~/.config/lispbar/config.lisp`) is a Lisp file evaluated by the
-binary on startup.  Every form is one of:
+## A minimal example config
 
 ```lisp
-(placement :left   (:workspaces))
+;; ~/.config/lispbar/config.lisp
+(placement :left   (:launcher :workspaces))
 (placement :center (:media))
-(placement :right  (:cpu :memory :audio :bluetooth :brightness :battery :clock))
+(placement :right  (:cpu :memory :audio :network :battery :tray :clock))
 
-(position      :top)            ; :top | :bottom
-(height        28)              ; bar height in pixels
-(margin        8 12 0 12)       ; CSS-style: top right bottom left
-(padding       12)              ; inside the bar, left + right edges
-(gap           12)              ; horizontal space between modules
-(corner-radius 12)              ; rounded background; 0 = sharp
-(font          "Sans Bold 11")  ; Pango font description
-(theme         :nordish)        ; or any registered theme
-(tick          1.0)             ; refresh interval in seconds
-(output        :wayland)        ; :wayland :stdout :json
-(log-level     :info)           ; :debug :info :warn :error
+(position      :top)
+(height        32)
+(margin        8 12 0 12)        ; CSS-style: top right bottom left
+(corner-radius 12)               ; floating rounded pill
+(padding       18)
+(gap           18)
+
+(font          "Sans 11")
+(theme         :catppuccinish)
+(output        :wayland)
 ```
 
-Forms are evaluated top-to-bottom; later forms override earlier ones.
-The config file may also contain ordinary Lisp forms - `defmodule`,
-`define-theme`, `setf` - so you can keep your whole setup in one
-place if you prefer.
+## Documentation
 
-### XDG search path
+| Doc                                        | What                                                      |
+| ------------------------------------------ | --------------------------------------------------------- |
+| [docs/install.md](docs/install.md)         | Per-distro build & install; uninstall; first-run setup    |
+| [docs/configuration.md](docs/configuration.md) | Every config keyword, every per-module variable          |
+| [docs/modules.md](docs/modules.md)         | Built-in module reference + how to write your own         |
+| [docs/themes.md](docs/themes.md)           | Built-in palettes + how to write your own theme           |
+| [docs/compositors.md](docs/compositors.md) | Sway / Hyprland / niri setup notes                       |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common problems and their fixes                  |
+| [docs/architecture.md](docs/architecture.md)| Internals, for contributors                              |
 
-Lispbar is fully XDG-compliant.  The binary searches, in order:
+## How custom extension works (the short version)
 
-| What         | Path                                                                  |
-| ------------ | --------------------------------------------------------------------- |
-| Config file  | `$XDG_CONFIG_HOME/lispbar/config.lisp`                                |
-| Config dirs  | every `$XDG_CONFIG_DIRS/.../lispbar/config.lisp`                      |
-| User modules | `$XDG_CONFIG_HOME/lispbar/modules/*.lisp`                             |
-| User themes  | `$XDG_CONFIG_HOME/lispbar/themes/*.lisp`                              |
-| System dirs  | every `$XDG_CONFIG_DIRS/.../lispbar/{modules,themes}/*.lisp`          |
-| Data dirs    | `$XDG_DATA_HOME/lispbar/{modules,themes}/*.lisp`, then `$XDG_DATA_DIRS` |
-| State        | `$XDG_STATE_HOME/lispbar/` (for module bookkeeping)                   |
-| Cache        | `$XDG_CACHE_HOME/lispbar/` (for module caches)                        |
-
-Inspect the live resolution with `lispbar --print-paths` and
-`lispbar --show-extensions`.
-
-## Writing your own module
-
-Drop a file under `$XDG_CONFIG_HOME/lispbar/modules/`:
+Drop a `.lisp` file under `~/.config/lispbar/modules/` and it's
+loaded at startup.  Same for `~/.config/lispbar/themes/`.  Both
+work without rebuilding the binary:
 
 ```lisp
 ;; ~/.config/lispbar/modules/loadavg.lisp
 (in-package :lispbar)
 
 (defmodule :loadavg
-  (:doc "5- and 15-minute load average."
-   :position :right :priority 58 :interval 5.0)
+  (:doc "5- and 15-minute load average"
+   :position :right :priority 58 :interval 5.0
+   :on-click ((:left "xdg-open https://example.com"))
+   :tooltip "hover me")
   (when (probe-file "/proc/loadavg")
-    (with-open-file (s "/proc/loadavg" :direction :input)
+    (with-open-file (s "/proc/loadavg")
       (let* ((line (read-line s nil ""))
              (parts (uiop:split-string line :separator '(#\Space))))
-        (when (>= (length parts) 3)
-          (list :text (format nil "LOAD ~a ~a"
-                              (second parts) (third parts))
-                :face :muted))))))
+        (and (>= (length parts) 3)
+             (format nil "LOAD ~a ~a" (second parts) (third parts)))))))
 ```
 
-Then reference `:loadavg` in `config.lisp`:
+Reference it in `config.lisp`:
 
 ```lisp
-(placement :right (:loadavg :cpu :memory :battery :clock))
+(placement :right (:loadavg ...))
 ```
 
-Restart lispbar; the new module appears.  No rebuild needed - user
-extensions are loaded as source `.lisp` files at startup.
-
-### Module API
-
-`defmodule NAME (&key doc position priority interval) BODY...`
-registers a factory.  Every tick the body is evaluated; its value
-becomes the module's display content.  The return value is one of:
-
-| Return                                  | Meaning                                |
-| --------------------------------------- | -------------------------------------- |
-| `NIL` or `""`                           | Module hidden this tick.               |
-| `"a string"`                            | One fragment, `:normal` face.          |
-| `(:text "X" :face :urgent)`             | One fragment, custom face.             |
-| `(:fragments (("X" :muted) ("2" :accent)))` | Multiple fragments with per-fragment faces. |
-
-Available faces: `:normal :accent :ok :warn :urgent :muted`
-(`:bg` is the bar background).
-
-Helpers exported for module authors:
-
-| Symbol                       | What                                                    |
-| ---------------------------- | ------------------------------------------------------- |
-| `run-capture PROGRAM &rest`  | Run a process, return stdout string on exit 0, NIL else |
-| `logmsg LEVEL FMT &rest`     | Structured stderr log                                   |
-| `lispbar-state-directory`    | `$XDG_STATE_HOME/lispbar/`, created on first use         |
-| `lispbar-cache-directory`    | `$XDG_CACHE_HOME/lispbar/`, created on first use         |
-
-## Writing your own theme
-
-Drop a file under `$XDG_CONFIG_HOME/lispbar/themes/`:
+Themes work the same way:
 
 ```lisp
 ;; ~/.config/lispbar/themes/dracula.lisp
@@ -222,108 +121,13 @@ Drop a file under `$XDG_CONFIG_HOME/lispbar/themes/`:
   :warn   '(0.945 0.980 0.549 1.0)
   :urgent '(1.000 0.333 0.333 1.0)
   :muted  '(0.380 0.420 0.490 1.0))
+
+;; then: (theme :dracula) in config.lisp
 ```
 
-Reference it from `config.lisp`:
-
-```lisp
-(theme :dracula)
-```
-
-Colours are `(R G B A)` doubles in 0.0-1.0.  Every face listed in
-the `Module API` section is recognised; omitted faces fall back to
-the active theme's `:normal`.
-
-Built-in themes you can copy as a starting point:
-`:default`, `:minimal`, `:nordish`, `:gruvboxish`, `:catppuccinish`,
-`:doomish`.
-
-## Built-in modules
-
-| Name           | Source                       |
-| -------------- | ---------------------------- |
-| `:clock`       | local time                   |
-| `:workspaces`  | `swaymsg` / `hyprctl` IPC    |
-| `:media`       | `playerctl` (any MPRIS2)     |
-| `:cpu`         | `/proc/loadavg`              |
-| `:memory`      | `/proc/meminfo`              |
-| `:battery`     | `/sys/class/power_supply/`   |
-| `:audio`       | `wpctl` → `pactl` → `amixer` |
-| `:bluetooth`   | `bluetoothctl`               |
-| `:brightness`  | `brightnessctl` → sysfs      |
-
-`lispbar --list-modules` prints the live inventory (built-ins plus
-anything discovered under XDG).
-
-## Output drivers
-
-| Output     | What it does                                       |
-| ---------- | -------------------------------------------------- |
-| `:wayland` | Native `wlr-layer-shell` client, one surface per monitor, cairo + Pango rendering. |
-| `:stdout`  | Plain text, one bar line per tick.                 |
-| `:json`    | Waybar-compatible JSON object per tick (drop-in custom-module driver). |
-
-The JSON driver is what made early development bootable: until the
-Wayland path landed, lispbar plugged into waybar via:
-
-```jsonc
-// ~/.config/waybar/config
-"custom/lispbar": {
-  "exec": "lispbar --output json",
-  "return-type": "json"
-}
-```
-
-The `:wayland` driver makes that intermediate step unnecessary.
-
-## How the Wayland driver works
-
-* `cshim/wlbar.c` is a ~300-line C glue layer.  It hides the parts
-  that *must* be C — the generated wlr-layer-shell marshalling
-  tables, binding registry globals, allocating wl_shm ARGB32 buffers,
-  pumping `wl_display_dispatch` — behind a flat ~15-symbol API.
-* `src/output/wayland.lisp` FFIs into `libwlbar.so` and into a tight
-  set of cairo + pango functions.  It iterates `wlbar_output_count()`
-  each tick, paints each output's buffer, commits.
-* Everything user-facing — modules, config, theming, layout — stays
-  in Common Lisp.
-
-That separation is why the binary stays "Lispy" without re-implementing
-the Wayland wire format by hand.
-
-## Layout
-
-```
-.
-├── lispbar.asd                ASDF system (depends on cffi)
-├── build.lisp                 sb-ext:save-lisp-and-die driver
-├── Makefile                   make build / install / test
-├── systemd/lispbar.service    user unit
-├── protocols/
-│   └── wlr-layer-shell-unstable-v1.xml
-├── cshim/
-│   ├── wlbar.c                C glue (uses generated marshalling)
-│   ├── wlbar.h                ~15-symbol FFI surface
-│   └── Makefile               builds libwlbar.so
-├── src/
-│   ├── package.lisp           Common Lisp package
-│   ├── log.lisp               stderr logger
-│   ├── xdg.lisp               XDG Base Directory helpers
-│   ├── theme.lisp             theme registry + define-theme + built-ins
-│   ├── config.lisp            config DSL loader + extension discovery
-│   ├── module.lisp            defmodule macro + registry + faces
-│   ├── modules/               clock, workspaces, media, cpu, memory,
-│   │                          battery, audio, bluetooth, brightness
-│   ├── output/
-│   │   ├── stdout.lisp        text + JSON drivers
-│   │   └── wayland.lisp       layer-shell driver
-│   └── main.lisp              entry, arg parsing, signal handlers
-└── examples/
-    ├── config.lisp
-    ├── modules/loadavg.lisp
-    └── themes/dracula.lisp
-```
+See [docs/modules.md](docs/modules.md) and
+[docs/themes.md](docs/themes.md) for the full API.
 
 ## License
 
-GPL-3.0-or-later.
+GPL-3.0-or-later.  See [LICENSE](LICENSE).

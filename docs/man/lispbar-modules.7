@@ -1,0 +1,152 @@
+.\" lispbar-modules(7) - lispbar module authoring guide
+.TH LISPBAR-MODULES 7 "May 2026" "lispbar" "Miscellaneous"
+.SH NAME
+lispbar-modules \- built-in modules and how to write your own
+.SH SYNOPSIS
+.EX
+;; ~/.config/lispbar/modules/MY-MODULE.lisp
+(in-package :lispbar)
+
+(defmodule :MY-NAME (:doc "..." :position :right
+                     :priority 50 :interval 5.0
+                     :on-click (...)
+                     :tooltip  ...)
+  ;; body returns string / plist / NIL
+  )
+.EE
+.SH DESCRIPTION
+A Lispbar module is a piece of state-producing code declared with
+.BR defmodule .
+Built-in modules live in
+.IR @PREFIX@/share/doc/lispbar/modules.md ;
+user modules live in
+.I $XDG_CONFIG_HOME/lispbar/modules/*.lisp
+and are loaded at startup with
+.B *package*
+bound to
+.BR :lispbar .
+.SH BUILT-IN MODULES
+.PP
+.TS
+allbox tab(|);
+l l l l.
+NAME|SOURCE|DEFAULT POSITION|INTERVAL
+:audio|wpctl > pactl > amixer|right|2 s
+:battery|/sys/class/power_supply|right|30 s
+:bluetooth|bluetoothctl|right|10 s
+:brightness|brightnessctl > sysfs|right|10 s
+:clock|local time|right|1 s
+:cpu|/proc/loadavg|right|5 s
+:launcher|(button)|left|60 s
+:media|playerctl (MPRIS2)|center|3 s
+:memory|/proc/meminfo|right|10 s
+:network|nmcli > /proc > ip|right|5 s
+:tray|StatusNotifierItem (D-Bus)|right|1 s
+:workspaces|swaymsg/hyprctl/niri msg|left|0.5 s
+.TE
+.PP
+List the live inventory:
+.EX
+$ lispbar --list-modules
+.EE
+.SH DEFMODULE KEYWORDS
+.TP
+.BR :doc " " \fISTRING\fR
+Short description shown by
+.BR --list-modules .
+.TP
+.BR :position " " \fIKEYWORD\fR
+.BR :left ", " :center ", or " :right
+\(em default section when the user puts this module name in their
+placement lists.
+.TP
+.BR :priority " " \fIINT\fR
+0\(en100, higher values render further left within a section.
+.TP
+.BR :interval " " \fISECONDS\fR
+How often the body re-runs; the renderer caches the previous
+output between ticks.
+.TP
+.BR :on-click " " \fIPLIST\fR
+Maps button keywords to handlers.  See
+.BR lispbar.conf (5).
+.TP
+.BR :tooltip " " \fIVALUE\fR
+String, function-of-no-args, or symbol of such a function.  The
+return value is rendered on a floating layer-shell surface below
+the module while the pointer is over it.
+.SH RETURN VALUE
+The body runs each
+.B interval
+and must return one of:
+.IP \(bu 2
+.B nil
+or
+.B ""
+\(em module hidden this tick.
+.IP \(bu 2
+.IB """string"""
+\(em one fragment,
+.B :normal
+face.
+.IP \(bu 2
+.BR "(:text " \fI"X"\fB " :face " \fIFACE\fB ")"
+\(em one fragment with a custom face.
+.IP \(bu 2
+.BR "(:fragments " \fIFRAGMENT-LIST\fB ")"
+\(em multi-fragment output.
+.SH FACES
+.BR :bg ", " :normal ", " :accent ", " :ok ", " :warn ", " :urgent ", " :muted .
+Themes map these to colours.
+.SH HELPERS EXPORTED FOR MODULES
+.TP
+.BI run-capture " PROGRAM &rest ARGS"
+Run external PROGRAM, return its stdout string on success, NIL otherwise.
+.TP
+.BI executable-find-check " NAME"
+T if NAME is on $PATH.
+.TP
+.BI logmsg " LEVEL FMT &rest ARGS"
+Write to stderr.  LEVEL is one of
+.BR :debug ", " :info ", " :warn ", " :error .
+.TP
+.B lispbar-state-directory
+Return
+.IR $XDG_STATE_HOME/lispbar/ ,
+creating it on first use.
+.TP
+.B lispbar-cache-directory
+Return
+.IR $XDG_CACHE_HOME/lispbar/ ,
+creating it on first use.
+.SH EXAMPLE
+.EX
+;; ~/.config/lispbar/modules/loadavg.lisp
+(in-package :lispbar)
+
+(defmodule :loadavg
+  (:doc "5/15-minute CPU load average"
+   :position :right :priority 58 :interval 5.0
+   :on-click ((:left "xdg-open https://example.com/load"))
+   :tooltip "hover for details")
+  (when (probe-file "/proc/loadavg")
+    (with-open-file (s "/proc/loadavg")
+      (let* ((line (read-line s nil ""))
+             (parts (uiop:split-string line :separator '(#\eSpace))))
+        (when (>= (length parts) 3)
+          (list :text (format nil "LOAD ~a ~a"
+                              (second parts) (third parts))
+                :face :muted))))))
+.EE
+Reference it from
+.IR config.lisp :
+.EX
+(placement :right (:loadavg :cpu :memory :clock))
+.EE
+.SH SEE ALSO
+.BR lispbar (1),
+.BR lispbar.conf (5),
+.BR lispbar-themes (7).
+.PP
+Full reference:
+.IR @PREFIX@/share/doc/lispbar/modules.md .
