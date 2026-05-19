@@ -21,7 +21,9 @@
 
    ;; Config DSL
    #:placement #:theme #:output #:font #:height #:tick #:log-level
+   #:position
    #:load-config #:load-extensions
+   #:seed-user-config #:*default-config-source* #:*seed-disabled*
    #:*config* #:*loaded-extension-files*
 
    ;; Module registry
