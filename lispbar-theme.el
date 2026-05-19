@@ -244,7 +244,8 @@ toolbar redraw if Lispbar is running."
     (unless entry
       (user-error "Unknown Lispbar theme `%s'" theme))
     (dolist (pair (plist-get entry :faces))
-      (face-spec-set (car pair) (cdr pair) 'face-defface-spec))
+      ;; Each entry is (FACE SPEC); face-spec-set wants the bare SPEC.
+      (face-spec-set (car pair) (cadr pair) 'face-defface-spec))
     (setq lispbar-current-theme theme)
     (when (and (fboundp 'lispbar-refresh)
                (boundp 'lispbar-mode) lispbar-mode)
