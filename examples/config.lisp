@@ -136,3 +136,88 @@
 ;;
 ;;   :debug :info :warn :error   Built-in default: :info
 (log-level :info)
+
+;;; ==========================================================
+;;; 6.  Per-module options
+;;; ==========================================================
+;;;
+;;; Modules expose plain Lisp variables; tune them with `setf'.
+;;; Unset variables fall back to the documented built-in default.
+;;; Listed alphabetically.
+
+;; ----- :audio -----
+;;
+;; (none currently exposed; behaviour is fully derived from `wpctl' /
+;; `pactl' / `amixer' output.)
+
+;; ----- :battery -----
+;;
+;; (none currently exposed; faces are picked automatically based on
+;; charge level and charging state.)
+
+;; ----- :bluetooth -----
+;;
+;; (none currently exposed; reads bluetoothctl directly.)
+
+;; ----- :brightness -----
+;;
+;; (none currently exposed; tries brightnessctl then sysfs.)
+
+;; ----- :clock -----
+;;
+;; Time-of-day format.
+;;
+;;   :hh-mm-ss     24-hour with seconds       "14:32:07"
+;;   :hh-mm        24-hour without seconds    "14:32"
+;;   :iso8601      full ISO 8601              "2025-05-19 14:32:07"
+;;   <function>    your own zero-arg function returning a string
+;;
+;;   Built-in default: :hh-mm-ss
+(setf *clock-format* :hh-mm-ss)
+
+;; ----- :cpu, :memory -----
+;;
+;; (none currently exposed; thresholds are baked in.)
+
+;; ----- :media -----
+;;
+;; Format of the now-playing string.
+;;
+;;   :artist-title  "Artist - Title"
+;;   :title-only    just the title
+;;   :short         title when present, else artist
+;;
+;;   Built-in default: :artist-title
+(setf *media-format* :artist-title)
+;; Maximum characters before the now-playing text is truncated.
+;;
+;;   integer                     Built-in default: 60
+(setf *media-max-length* 60)
+
+;; ----- :workspaces -----
+;;
+;; Which workspaces to show.  Same policy is applied uniformly to
+;; Sway, Hyprland and niri (they all expose workspace + output info
+;; in their IPC).
+;;
+;;   :current-output  workspaces on the focused monitor only
+;;   :all             every workspace across every monitor (note:
+;;                    on niri this may show duplicate numbers, since
+;;                    each output has its own 1, 2, 3 numbering)
+;;   :focused         only the workspace that currently has focus
+;;
+;;   Built-in default: :current-output
+(setf *workspaces-scope* :current-output)
+;; Brackets wrapping the focused workspace.
+;;
+;;   cons of OPEN/CLOSE strings   Built-in default: ("[" . "]")
+(setf *workspaces-brackets* '("[" . "]"))
+;; Separator between workspaces.
+;;
+;;   string                       Built-in default: " "
+(setf *workspaces-separator* " ")
+;; What to show when the filter leaves zero workspaces (e.g. early
+;; in session).  NIL keeps the module silent.
+;;
+;;   string | NIL                 Built-in default: NIL
+(setf *workspaces-empty-text* nil)
