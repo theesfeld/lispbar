@@ -29,6 +29,55 @@
     :tick 1.0)
   "Active configuration plist, set by `load-config'.")
 
+;;; ---- First-run seeding ----
+;;;
+;;; The text of `examples/config.lisp' is read at compile time and
+;;; baked into the binary so the runtime can drop a starter file at
+;;; $XDG_CONFIG_HOME/lispbar/config.lisp on first launch without
+;;; touching the filesystem outside the user's XDG tree.
+
+(defvar *default-config-source*
+  #.(uiop:read-file-string
+     (merge-pathnames "../examples/config.lisp"
+                      (or *compile-file-truename* *load-truename*)))
+  "Text written to ~/.config/lispbar/config.lisp on first run when
+no config exists anywhere.")
+
+(defun seed-user-config (&key force quiet)
+  "If no user config exists at $XDG_CONFIG_HOME/lispbar/config.lisp,
+create the lispbar/, modules/ and themes/ directories there and
+write the bundled default config.  Returns the path of the file
+written, or NIL when nothing was done.
+
+With FORCE non-nil, overwrites an existing config (intended for
+the explicit `lispbar --init --force')."
+  (handler-case
+      (let* ((root        (merge-pathnames "lispbar/" (xdg-config-home)))
+             (config-file (merge-pathnames "config.lisp" root))
+             (modules-dir (merge-pathnames "modules/"   root))
+             (themes-dir  (merge-pathnames "themes/"    root)))
+        (cond
+          ((and (probe-file config-file) (not force))
+           nil)
+          (t
+           (ensure-directories-exist modules-dir)
+           (ensure-directories-exist themes-dir)
+           (with-open-file (s config-file
+                              :direction         :output
+                              :if-exists         :supersede
+                              :if-does-not-exist :create)
+             (write-string *default-config-source* s))
+           (unless quiet
+             (logmsg :info "first-run: created ~a" config-file)
+             (logmsg :info "  edit it to customise, then restart lispbar"))
+           config-file)))
+    (file-error (c)
+      (logmsg :warn "could not seed user config: ~a" c)
+      nil)
+    (error (c)
+      (logmsg :warn "unexpected error while seeding user config: ~a" c)
+      nil)))
+
 ;;; ---- The DSL ----
 ;;;
 ;;; A user config is a sequence of top-level forms.  Each form is one
@@ -104,17 +153,43 @@ the next file (one broken module never stops the bar from booting)."
 
 ;;; ---- Config loading ----
 
+(defun seeding-disabled-p ()
+  "Return non-nil when first-run seeding should be skipped, either
+because the user set $LISPBAR_NO_SEED or because we're running with
+the `--no-seed' CLI flag (caller sets `*seed-disabled*' in that case)."
+  (or *seed-disabled*
+      (let ((v (uiop:getenv "LISPBAR_NO_SEED")))
+        (and v (plusp (length v))))))
+
+(defvar *seed-disabled* nil
+  "Bound by `main' when the user passes --no-seed.")
+
 (defun load-config (&optional path)
   "Load extensions, then read PATH (or the first XDG-discovered
-config) into `*config*'.  A missing config file is non-fatal - the
-binary then runs with the built-in defaults plus whatever modules /
-themes are present in $XDG_*_HOME/lispbar/."
+config) into `*config*'.  If no config file is found anywhere, seed
+a starter one at $XDG_CONFIG_HOME/lispbar/config.lisp so the binary
+'just works' on first run.  Set $LISPBAR_NO_SEED or pass --no-seed
+to skip seeding."
   (load-extensions)
   (let ((file (or path (lispbar-config-file))))
     (cond
+      ;; No config anywhere: seed one (unless explicitly opted out).
       ((null file)
-       (logmsg :info "no config file found (expected at ~a); using defaults"
-               (lispbar-default-config-path)))
+       (cond
+         ((seeding-disabled-p)
+          (logmsg :info "no config file found and seeding disabled; using defaults"))
+         (t
+          (setf file (seed-user-config))
+          (cond
+            (file
+             (logmsg :info "loading freshly-seeded config from ~a" file)
+             (with-open-file (s file :direction :input)
+               (let ((*package* (find-package :lispbar)))
+                 (loop for form = (read s nil :eof)
+                       until (eq form :eof)
+                       do (evaluate-config-form form)))))
+            (t
+             (logmsg :info "could not seed user config; using defaults"))))))
       ((not (probe-file file))
        (logmsg :info "config file ~a not found; using defaults" file))
       (t

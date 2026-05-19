@@ -82,12 +82,27 @@ init system, OpenRC included.
 ./lispbar                       # streams forever, picks driver from config
 ./lispbar --once                # one frame to stdout (handy for scripts)
 ./lispbar --output json         # waybar-compatible JSON per tick
+./lispbar --init                # seed ~/.config/lispbar/ explicitly
 ./lispbar --list-modules        # registry inventory
 ./lispbar --list-themes         # theme registry
 ./lispbar --print-paths         # XDG path resolution
 ./lispbar --show-extensions     # which user files got loaded
 ./lispbar --help
 ```
+
+### First run
+
+On the first launch, if no config exists anywhere in the XDG search
+path, Lispbar creates `$XDG_CONFIG_HOME/lispbar/`, drops a starter
+`config.lisp` (the same one in `examples/config.lisp`), and creates
+empty `modules/` and `themes/` directories so you know where to put
+your own extensions.  The bar then boots from that fresh config -
+no manual `cp` required.
+
+To turn this off (e.g. on a server / staged image where you'll ship
+the config separately), pass `--no-seed` or set
+`LISPBAR_NO_SEED=1` in the environment.  To re-seed an existing
+config explicitly, `lispbar --init --force`.
 
 ### Configuration
 
