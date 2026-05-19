@@ -68,8 +68,19 @@ cairo_show_text which has no font fallback or shaping."
 
 ;;; ---------- wlbar (C shim) FFI ----------
 
-(cffi:defcfun ("wlbar_init"           wlbar-init)         :int (height :int))
+(cffi:defcfun ("wlbar_init"           wlbar-init)         :int
+  (height :int) (position :int))
 (cffi:defcfun ("wlbar_shutdown"       wlbar-shutdown)     :void)
+
+(defconstant +wlbar-position-top+    0)
+(defconstant +wlbar-position-bottom+ 1)
+
+(defun position->c (sym)
+  "Translate a config :top / :bottom keyword to the C-side enum."
+  (case sym
+    ((:top nil)  +wlbar-position-top+)
+    ((:bottom)   +wlbar-position-bottom+)
+    (t           +wlbar-position-top+)))
 (cffi:defcfun ("wlbar_poll"           wlbar-poll)         :int (timeout :int))
 (cffi:defcfun ("wlbar_closed"         wlbar-closed)       :int)
 
@@ -284,8 +295,9 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
   (when (getf config :font)
     (setf *wayland-font-spec* (getf config :font)))
 
-  (let* ((height (or (getf config :height) 28))
-         (rc     (wlbar-init height)))
+  (let* ((height   (or (getf config :height) 28))
+         (position (position->c (getf config :position)))
+         (rc       (wlbar-init height position)))
     (when (< rc 0)
       (logmsg :error "wlbar_init failed; falling back to :stdout")
       (run-stdout config)

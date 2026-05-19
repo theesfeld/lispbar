@@ -17,11 +17,15 @@ extern "C" {
 
 /* Lifecycle ------------------------------------------------------- */
 
+/* Bar placement, passed to wlbar_init(). */
+#define WLBAR_POSITION_TOP    0
+#define WLBAR_POSITION_BOTTOM 1
+
 /* Connect to the compositor and create one layer-shell surface per
- * connected wl_output, anchored to the top edge of each with HEIGHT
- * pixels of exclusive zone.  Returns the number of surfaces created
- * (>= 1) on success or -1 on failure. */
-int   wlbar_init(int height);
+ * connected wl_output, anchored to POSITION (WLBAR_POSITION_TOP or
+ * _BOTTOM) with HEIGHT pixels of exclusive zone.  Returns the
+ * number of surfaces created (>= 1) on success or -1 on failure. */
+int   wlbar_init(int height, int position);
 
 /* Release every Wayland object and disconnect.  Safe to call
  * repeatedly. */
