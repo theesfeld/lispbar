@@ -13,8 +13,26 @@
                   (uiop:split-string out :separator '(#\Newline)))
         0)))
 
+(defvar *bluetooth-on-click* "blueman-manager || blueberry"
+  "Shell command for left-click on the bluetooth module.  NIL to disable.")
+(defvar *bluetooth-on-middle-click* "bluetoothctl power toggle"
+  "Shell command for middle-click - toggle adapter power.")
+
+(defun bluetooth-left-click (_m _b _i)
+  (declare (ignore _m _b _i))
+  (when (and *bluetooth-on-click* (plusp (length *bluetooth-on-click*)))
+    (uiop:launch-program (list "sh" "-c" *bluetooth-on-click*))))
+
+(defun bluetooth-middle-click (_m _b _i)
+  (declare (ignore _m _b _i))
+  (when (and *bluetooth-on-middle-click*
+             (plusp (length *bluetooth-on-middle-click*)))
+    (uiop:launch-program (list "sh" "-c" *bluetooth-on-middle-click*))))
+
 (defmodule :bluetooth (:doc "Adapter state and connection count."
-                       :position :right :priority 50 :interval 10.0)
+                       :position :right :priority 50 :interval 10.0
+                       :on-click ((:left   bluetooth-left-click)
+                                  (:middle bluetooth-middle-click)))
   (cond ((not (bt-powered-p))
          (list :text "BT off" :face :muted))
         (t

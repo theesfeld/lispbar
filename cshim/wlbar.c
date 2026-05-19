@@ -67,6 +67,21 @@ static int                g_margin_right  = 0;
 static int                g_margin_bottom = 0;
 static int                g_margin_left   = 0;
 
+/* ---- Pointer input ---- */
+
+#define EVENT_QUEUE_SIZE 64
+static struct wlbar_pointer_event g_events[EVENT_QUEUE_SIZE];
+static int g_event_head = 0;  /* next write index */
+static int g_event_tail = 0;  /* next read  index */
+
+static struct wl_seat    *g_seat    = NULL;
+static struct wl_pointer *g_pointer = NULL;
+/* Track which output the pointer is over, and its surface-local
+ * position, so a button event can be attributed correctly. */
+static int    g_pointer_output  = -1;
+static double g_pointer_x       = 0.0;
+static double g_pointer_y       = 0.0;
+
 /* ---- Forward decls ---- */
 
 static int   bar_output_open (struct bar_output *bo);
@@ -155,6 +170,106 @@ static struct bar_output *register_output(struct wl_output *out, uint32_t id) {
     return bo;
 }
 
+/* ---- Pointer / seat ---- */
+
+static int surface_to_output_idx(struct wl_surface *s) {
+    for (int i = 0; i < g_output_count; i++)
+        if (g_outputs[i].surface == s) return i;
+    return -1;
+}
+
+static void pointer_enter(void *_d, struct wl_pointer *_p,
+                          uint32_t _serial, struct wl_surface *surface,
+                          wl_fixed_t sx, wl_fixed_t sy) {
+    (void)_d;(void)_p;(void)_serial;
+    g_pointer_output = surface_to_output_idx(surface);
+    g_pointer_x = wl_fixed_to_double(sx);
+    g_pointer_y = wl_fixed_to_double(sy);
+}
+static void pointer_leave(void *_d, struct wl_pointer *_p,
+                          uint32_t _serial, struct wl_surface *_s) {
+    (void)_d;(void)_p;(void)_serial;(void)_s;
+    g_pointer_output = -1;
+}
+static void pointer_motion(void *_d, struct wl_pointer *_p, uint32_t _t,
+                           wl_fixed_t sx, wl_fixed_t sy) {
+    (void)_d;(void)_p;(void)_t;
+    g_pointer_x = wl_fixed_to_double(sx);
+    g_pointer_y = wl_fixed_to_double(sy);
+}
+static void pointer_button(void *_d, struct wl_pointer *_p,
+                           uint32_t _serial, uint32_t _t,
+                           uint32_t button, uint32_t state) {
+    (void)_d;(void)_p;(void)_serial;(void)_t;
+    /* Only enqueue presses; releases aren't interesting for clicks. */
+    if (state != 1 /* WL_POINTER_BUTTON_STATE_PRESSED */) return;
+    if (g_pointer_output < 0) return;
+    int next = (g_event_head + 1) % EVENT_QUEUE_SIZE;
+    if (next == g_event_tail) return; /* queue full; drop oldest */
+    g_events[g_event_head].output_idx = g_pointer_output;
+    g_events[g_event_head].x          = g_pointer_x;
+    g_events[g_event_head].y          = g_pointer_y;
+    g_events[g_event_head].button     = (int)button;
+    g_events[g_event_head].pressed    = 1;
+    g_event_head = next;
+}
+static void pointer_axis(void *_d, struct wl_pointer *_p, uint32_t _t,
+                         uint32_t _axis, wl_fixed_t _v) {
+    (void)_d;(void)_p;(void)_t;(void)_axis;(void)_v;
+}
+static void pointer_frame(void *_d, struct wl_pointer *_p) {(void)_d;(void)_p;}
+static void pointer_axis_source(void *_d, struct wl_pointer *_p, uint32_t _s) {
+    (void)_d;(void)_p;(void)_s;
+}
+static void pointer_axis_stop(void *_d, struct wl_pointer *_p, uint32_t _t,
+                              uint32_t _axis) {(void)_d;(void)_p;(void)_t;(void)_axis;}
+static void pointer_axis_discrete(void *_d, struct wl_pointer *_p,
+                                  uint32_t _axis, int32_t _d2) {
+    (void)_d;(void)_p;(void)_axis;(void)_d2;
+}
+static void pointer_axis_value120(void *_d, struct wl_pointer *_p,
+                                  uint32_t _axis, int32_t _v) {
+    (void)_d;(void)_p;(void)_axis;(void)_v;
+}
+static void pointer_axis_relative_direction(void *_d, struct wl_pointer *_p,
+                                            uint32_t _axis, uint32_t _dir) {
+    (void)_d;(void)_p;(void)_axis;(void)_dir;
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+    .enter                   = pointer_enter,
+    .leave                   = pointer_leave,
+    .motion                  = pointer_motion,
+    .button                  = pointer_button,
+    .axis                    = pointer_axis,
+    .frame                   = pointer_frame,
+    .axis_source             = pointer_axis_source,
+    .axis_stop               = pointer_axis_stop,
+    .axis_discrete           = pointer_axis_discrete,
+    .axis_value120           = pointer_axis_value120,
+    .axis_relative_direction = pointer_axis_relative_direction,
+};
+
+static void seat_capabilities(void *_d, struct wl_seat *seat, uint32_t caps) {
+    (void)_d;
+    int have_pointer = (caps & WL_SEAT_CAPABILITY_POINTER) != 0;
+    if (have_pointer && !g_pointer) {
+        g_pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(g_pointer, &pointer_listener, NULL);
+    } else if (!have_pointer && g_pointer) {
+        wl_pointer_release(g_pointer);
+        g_pointer = NULL;
+    }
+}
+static void seat_name(void *_d, struct wl_seat *_s, const char *_n) {
+    (void)_d;(void)_s;(void)_n;
+}
+
+static const struct wl_seat_listener seat_listener = {
+    .capabilities = seat_capabilities,
+    .name         = seat_name,
+};
+
 static void registry_global(void *_data, struct wl_registry *reg, uint32_t id,
                             const char *iface, uint32_t version) {
     (void)_data;
@@ -162,6 +277,10 @@ static void registry_global(void *_data, struct wl_registry *reg, uint32_t id,
         g_compositor = wl_registry_bind(reg, id, &wl_compositor_interface, 4);
     } else if (!strcmp(iface, wl_shm_interface.name)) {
         g_shm = wl_registry_bind(reg, id, &wl_shm_interface, 1);
+    } else if (!strcmp(iface, wl_seat_interface.name)) {
+        uint32_t ver = version > 7 ? 7 : version;
+        g_seat = wl_registry_bind(reg, id, &wl_seat_interface, ver);
+        wl_seat_add_listener(g_seat, &seat_listener, NULL);
     } else if (!strcmp(iface, wl_output_interface.name)) {
         uint32_t ver = version > 4 ? 4 : version;
         struct wl_output *out = wl_registry_bind(reg, id,
@@ -353,11 +472,22 @@ int wlbar_init(int height, int position,
 void wlbar_shutdown(void) {
     for (int i = 0; i < g_output_count; i++) bar_output_close(&g_outputs[i]);
     g_output_count = 0;
+    if (g_pointer)       { wl_pointer_release(g_pointer);                  g_pointer = NULL; }
+    if (g_seat)          { wl_seat_release(g_seat);                        g_seat = NULL; }
     if (g_layer_shell)   { zwlr_layer_shell_v1_destroy(g_layer_shell);     g_layer_shell = NULL; }
     if (g_shm)           { wl_shm_destroy(g_shm);                          g_shm = NULL; }
     if (g_compositor)    { wl_compositor_destroy(g_compositor);            g_compositor = NULL; }
     if (g_registry)      { wl_registry_destroy(g_registry);                g_registry = NULL; }
     if (g_display)       { wl_display_disconnect(g_display);               g_display = NULL; }
+    g_event_head = g_event_tail = 0;
+    g_pointer_output = -1;
+}
+
+int wlbar_poll_pointer_event(struct wlbar_pointer_event *out) {
+    if (!out || g_event_head == g_event_tail) return 0;
+    *out = g_events[g_event_tail];
+    g_event_tail = (g_event_tail + 1) % EVENT_QUEUE_SIZE;
+    return 1;
 }
 
 int       wlbar_output_count (void) { return g_output_count; }

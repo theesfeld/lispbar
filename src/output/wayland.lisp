@@ -95,6 +95,16 @@ cairo_show_text which has no font fallback or shaping."
 (cffi:defcfun ("wlbar_output_commit"  wlbar-output-commit)  :void (i :int))
 (cffi:defcfun ("wlbar_output_name"    wlbar-output-name)    :string (i :int))
 
+;; Pointer event drained from the C-side queue.
+(cffi:defcstruct wlbar-pointer-event
+  (output-idx :int)
+  (x          :double)
+  (y          :double)
+  (button     :int)
+  (pressed    :int))
+(cffi:defcfun ("wlbar_poll_pointer_event" wlbar-poll-pointer-event) :int
+  (out :pointer))
+
 ;;; ---------- cairo FFI ----------
 
 (defconstant +cairo-format-argb32+ 0)
@@ -332,6 +342,57 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
       (pango-draw-fragments cr fragments x baseline-or-top)
       (cairo-draw-fragments cr fragments x baseline-or-top)))
 
+;;; ---- Per-module bounding boxes (for click hit-testing) ----
+
+(defvar *module-bboxes* (make-hash-table :test 'eql)
+  "Hash table OUTPUT-IDX -> list of (MODULE X-START X-END).
+Re-populated on every render so click hit-testing always reflects
+the latest geometry.")
+
+(defun record-bbox (output-idx module x-start x-end)
+  (push (list module x-start x-end)
+        (gethash output-idx *module-bboxes*)))
+
+(defun reset-bboxes (output-idx)
+  (setf (gethash output-idx *module-bboxes*) nil))
+
+(defun module-at-x (output-idx x)
+  "Return the MODULE whose bbox on OUTPUT-IDX contains X, or NIL."
+  (loop for (m start end) in (gethash output-idx *module-bboxes*)
+        when (and (>= x start) (<= x end))
+        return m))
+
+;;; ---- Render: lay out modules, painting per-module so bboxes line up ----
+
+(defun module-section-width (cr modules)
+  "Sum the painted width of MODULES + inter-module gaps."
+  (let ((total 0)
+        (first t))
+    (dolist (m modules)
+      (let* ((v     (module-output m))
+             (frags (module-output-fragments v)))
+        (when frags
+          (unless first (incf total *wayland-module-gap*))
+          (setf first nil)
+          (incf total (fragment-list-width cr frags)))))
+    total))
+
+(defun draw-section (cr modules start-x baseline output-idx)
+  "Paint MODULES starting at START-X, recording each module's bbox."
+  (let ((pen   (coerce start-x 'double-float))
+        (first t))
+    (dolist (m modules)
+      (let* ((v     (module-output m))
+             (frags (module-output-fragments v)))
+        (when frags
+          (unless first (incf pen *wayland-module-gap*))
+          (setf first nil)
+          (let ((mod-start pen))
+            (draw-fragments cr frags pen baseline)
+            (incf pen (fragment-list-width cr frags))
+            (record-bbox output-idx m mod-start pen)))))
+    pen))
+
 (defun render-output (i instances)
   "Paint output index I.  Returns NIL when the output is unmapped."
   (let* ((w      (wlbar-output-width i))
@@ -340,6 +401,7 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
          (stride (wlbar-output-stride i)))
     (when (or (zerop w) (zerop h) (cffi:null-pointer-p data))
       (return-from render-output nil))
+    (reset-bboxes i)
     (let* ((surf (cairo-isc4d data +cairo-format-argb32+ w h stride))
            (cr   (cairo-create surf)))
       (unwind-protect
@@ -348,25 +410,20 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
              (unless *have-pango*
                (cairo-select-font-face cr *wayland-font-family* 0 0)
                (cairo-set-font-size cr *wayland-font-size*))
-             (let* ((left   (module-fragments
-                             (collect-modules-for :left   instances)))
-                    (center (module-fragments
-                             (collect-modules-for :center instances)))
-                    (right  (module-fragments
-                             (collect-modules-for :right  instances)))
+             (let* ((left-modules   (collect-modules-for :left   instances))
+                    (center-modules (collect-modules-for :center instances))
+                    (right-modules  (collect-modules-for :right  instances))
                     (pad *wayland-padding*)
-                    ;; Pango: top-left coords; cairo: baseline.
                     (ypos (if *have-pango*
                               (/ (- h (* *wayland-font-size* 1.4)) 2.0)
                               (+ (/ h 2.0) (/ *wayland-font-size* 3.0d0)))))
-               (when left
-                 (draw-fragments cr left pad ypos))
-               (when center
-                 (let ((cw (fragment-list-width cr center)))
-                   (draw-fragments cr center (/ (- w cw) 2.0d0) ypos)))
-               (when right
-                 (let ((rw (fragment-list-width cr right)))
-                   (draw-fragments cr right (- w rw pad) ypos)))))
+               (draw-section cr left-modules pad ypos i)
+               (let ((cw (module-section-width cr center-modules)))
+                 (draw-section cr center-modules
+                               (/ (- w cw) 2.0d0) ypos i))
+               (let ((rw (module-section-width cr right-modules)))
+                 (draw-section cr right-modules
+                               (- w rw pad) ypos i))))
         (cairo-destroy cr)
         (cairo-surface-destroy surf)))
     (wlbar-output-commit i)
@@ -376,6 +433,23 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
   "Paint every output's surface."
   (loop for i from 0 below (wlbar-output-count)
         do (render-output i instances)))
+
+;;; ---- Click event drain ----
+
+(defun drain-pointer-events ()
+  "Pull every queued pointer event from the C shim and dispatch."
+  (cffi:with-foreign-object (evt '(:struct wlbar-pointer-event))
+    (loop while (eql 1 (wlbar-poll-pointer-event evt))
+          do (let* ((output-idx (cffi:foreign-slot-value
+                                  evt '(:struct wlbar-pointer-event) 'output-idx))
+                    (x          (cffi:foreign-slot-value
+                                  evt '(:struct wlbar-pointer-event) 'x))
+                    (button     (cffi:foreign-slot-value
+                                  evt '(:struct wlbar-pointer-event) 'button))
+                    (button-key (button->key button))
+                    (module     (module-at-x output-idx x)))
+               (when module
+                 (dispatch-module-click module button-key output-idx))))))
 
 ;;; ---------- Main loop ----------
 
@@ -418,5 +492,6 @@ the layout top-edge otherwise (pango positions glyphs from the top)."
          (render-frame instances)
          (loop while (and *running* (zerop (wlbar-closed))) do
                (wlbar-poll (round (* tick 1000)))
+               (drain-pointer-events)
                (render-frame instances)))
     (wlbar-shutdown)))
