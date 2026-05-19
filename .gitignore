@@ -77,3 +77,6 @@ tags
 # Native (SBCL) build artefacts
 native/lispbar
 native/**/*.fasl
+native/cshim/libwlbar.so
+native/cshim/wlr-layer-shell-unstable-v1-client-protocol.h
+native/cshim/wlr-layer-shell-unstable-v1-protocol.c
