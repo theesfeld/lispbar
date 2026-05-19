@@ -96,33 +96,100 @@
     (cffi:foreign-slot-value ext '(:struct cairo-text-extents) 'x-advance)))
 
 ;;; ---------- Theme palette ----------
+;;;
+;;; A theme is a plist mapping face keywords to (R G B A) doubles.
+;;; Module update functions return either a string (rendered with
+;;; :normal) or (:text STR :face FACE).  The faces are:
+;;;
+;;;   :bg :normal :accent :ok :warn :urgent :muted
 
-(defvar *wayland-bg* '(0.18 0.20 0.25 1.0)
-  "Bar background colour as a (R G B A) list of doubles 0.0-1.0.")
-(defvar *wayland-fg* '(0.85 0.87 0.91 1.0)
-  "Foreground colour for module text.")
+(defvar *wayland-theme* nil
+  "Plist of face -> colour for the active theme.")
 (defvar *wayland-font-family* "monospace")
 (defvar *wayland-font-size*   13.0d0)
 
+(defun theme-color (face)
+  "Return the (R G B A) colour for FACE in the active theme."
+  (or (getf *wayland-theme* face)
+      (getf *wayland-theme* :normal)
+      '(0.88 0.88 0.88 1.0)))
+
 (defun apply-theme (theme)
-  "Update the foreground/background palette from THEME (a keyword)."
-  (case theme
-    (:nordish      (setf *wayland-bg* '(0.180 0.204 0.251 1.0)
-                         *wayland-fg* '(0.847 0.871 0.914 1.0)))
-    (:gruvboxish   (setf *wayland-bg* '(0.157 0.157 0.157 1.0)
-                         *wayland-fg* '(0.922 0.859 0.698 1.0)))
-    (:catppuccinish(setf *wayland-bg* '(0.118 0.118 0.184 1.0)
-                         *wayland-fg* '(0.804 0.839 0.957 1.0)))
-    (:doomish      (setf *wayland-bg* '(0.157 0.173 0.204 1.0)
-                         *wayland-fg* '(0.733 0.761 0.812 1.0)))
-    (:minimal      (setf *wayland-bg* '(0.0 0.0 0.0 1.0)
-                         *wayland-fg* '(1.0 1.0 1.0 1.0)))
-    (t             (setf *wayland-bg* '(0.110 0.118 0.137 1.0)
-                         *wayland-fg* '(0.880 0.880 0.880 1.0)))))
+  "Install a face palette for THEME (a keyword)."
+  (setf *wayland-theme*
+        (case theme
+          (:nordish
+           '(:bg     (0.180 0.204 0.251 1.0)
+             :normal (0.847 0.871 0.914 1.0)
+             :accent (0.533 0.753 0.816 1.0)
+             :ok     (0.639 0.745 0.549 1.0)
+             :warn   (0.922 0.796 0.545 1.0)
+             :urgent (0.749 0.380 0.416 1.0)
+             :muted  (0.380 0.420 0.490 1.0)))
+          (:gruvboxish
+           '(:bg     (0.157 0.157 0.157 1.0)
+             :normal (0.922 0.859 0.698 1.0)
+             :accent (0.980 0.741 0.184 1.0)
+             :ok     (0.722 0.733 0.149 1.0)
+             :warn   (0.996 0.502 0.098 1.0)
+             :urgent (0.984 0.286 0.204 1.0)
+             :muted  (0.486 0.435 0.392 1.0)))
+          (:catppuccinish
+           '(:bg     (0.118 0.118 0.184 1.0)
+             :normal (0.804 0.839 0.957 1.0)
+             :accent (0.537 0.706 0.980 1.0)
+             :ok     (0.651 0.890 0.631 1.0)
+             :warn   (0.976 0.886 0.686 1.0)
+             :urgent (0.953 0.545 0.659 1.0)
+             :muted  (0.424 0.439 0.525 1.0)))
+          (:doomish
+           '(:bg     (0.157 0.173 0.204 1.0)
+             :normal (0.733 0.761 0.812 1.0)
+             :accent (0.318 0.686 0.937 1.0)
+             :ok     (0.596 0.745 0.396 1.0)
+             :warn   (0.925 0.745 0.482 1.0)
+             :urgent (1.000 0.424 0.420 1.0)
+             :muted  (0.357 0.384 0.408 1.0)))
+          (:minimal
+           '(:bg     (0.0 0.0 0.0 1.0)
+             :normal (1.0 1.0 1.0 1.0)
+             :accent (1.0 1.0 1.0 1.0)
+             :ok     (1.0 1.0 1.0 1.0)
+             :warn   (1.0 1.0 1.0 1.0)
+             :urgent (1.0 1.0 1.0 1.0)
+             :muted  (0.7 0.7 0.7 1.0)))
+          (t
+           '(:bg     (0.110 0.118 0.137 1.0)
+             :normal (0.880 0.880 0.880 1.0)
+             :accent (0.580 0.760 0.960 1.0)
+             :ok     (0.500 0.870 0.480 1.0)
+             :warn   (0.960 0.760 0.300 1.0)
+             :urgent (0.960 0.420 0.420 1.0)
+             :muted  (0.560 0.580 0.620 1.0))))))
 
 ;;; ---------- Frame rendering ----------
 
 (defun rgba->doubles (c) (mapcar (lambda (v) (coerce v 'double-float)) c))
+
+(defun fragment-list-width (cr fragments)
+  "Total pixel width of FRAGMENTS, painted back-to-back."
+  (loop for (text _face) in fragments
+        sum (cairo-text-width cr text)))
+
+(defun draw-fragments (cr fragments x baseline)
+  "Paint FRAGMENTS back-to-back starting at X / BASELINE.
+Each fragment carries its own face; spacing is up to the caller (the
+module-fragments helper already inserts space fragments)."
+  (let ((pen (coerce x 'double-float)))
+    (dolist (f fragments)
+      (let ((text (first f))
+            (face (second f)))
+        (apply #'cairo-set-source-rgba cr
+               (rgba->doubles (theme-color face)))
+        (cairo-move-to cr pen baseline)
+        (cairo-show-text cr text)
+        (incf pen (cairo-text-width cr text))))
+    pen))
 
 (defun render-frame (instances)
   "Paint a single frame: clear, then draw left | center | right text."
@@ -137,30 +204,29 @@
       (unwind-protect
            (progn
              ;; Background
-             (apply #'cairo-set-source-rgba cr (rgba->doubles *wayland-bg*))
+             (apply #'cairo-set-source-rgba cr
+                    (rgba->doubles (theme-color :bg)))
              (cairo-paint cr)
              ;; Font
              (cairo-select-font-face cr *wayland-font-family* 0 0)
              (cairo-set-font-size cr *wayland-font-size*)
-             ;; Foreground
-             (apply #'cairo-set-source-rgba cr (rgba->doubles *wayland-fg*))
 
-             (let* ((left   (render-section (collect-modules-for :left   instances)))
-                    (center (render-section (collect-modules-for :center instances)))
-                    (right  (render-section (collect-modules-for :right  instances)))
+             (let* ((left   (module-fragments
+                             (collect-modules-for :left   instances)))
+                    (center (module-fragments
+                             (collect-modules-for :center instances)))
+                    (right  (module-fragments
+                             (collect-modules-for :right  instances)))
                     (pad 12.0d0)
                     (baseline (+ (/ h 2.0) (/ *wayland-font-size* 3.0d0))))
-               (unless (zerop (length left))
-                 (cairo-move-to cr pad baseline)
-                 (cairo-show-text cr left))
-               (unless (zerop (length center))
-                 (let ((cw (cairo-text-width cr center)))
-                   (cairo-move-to cr (/ (- w cw) 2.0d0) baseline)
-                   (cairo-show-text cr center)))
-               (unless (zerop (length right))
-                 (let ((rw (cairo-text-width cr right)))
-                   (cairo-move-to cr (- w rw pad) baseline)
-                   (cairo-show-text cr right)))))
+               (when left
+                 (draw-fragments cr left pad baseline))
+               (when center
+                 (let ((cw (fragment-list-width cr center)))
+                   (draw-fragments cr center (/ (- w cw) 2.0d0) baseline)))
+               (when right
+                 (let ((rw (fragment-list-width cr right)))
+                   (draw-fragments cr right (- w rw pad) baseline)))))
         (cairo-destroy cr)
         (cairo-surface-destroy surf)))
     (wlbar-commit)))

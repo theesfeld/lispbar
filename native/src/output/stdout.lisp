@@ -21,12 +21,26 @@ priority descending."
   (let ((subset (remove-if-not (lambda (m) (eq (module-position m) key)) instances)))
     (sort subset #'> :key #'module-priority)))
 
+(defun module-fragments (modules)
+  "Return a flat list of (TEXT FACE) pairs for MODULES, dropping empty ones.
+Modules that report multiple fragments contribute all of them in
+order; a space fragment is inserted between modules."
+  (loop with result = nil
+        with first = t
+        for m in modules
+        for v = (module-output m)
+        for frags = (module-output-fragments v)
+        when frags do
+          (unless first (push (list " " :normal) result))
+          (setf first nil)
+          (dolist (f frags) (push f result))
+        finally (return (nreverse result))))
+
 (defun render-section (modules)
-  "Render a list of MODULES into a single space-separated string."
-  (let ((parts (loop for m in modules
-                     for s = (format-module m)
-                     when s collect s)))
-    (format nil "~{~a~^ ~}" parts)))
+  "Render a list of MODULES into a single concatenated string.
+Faces are discarded (the stdout / JSON drivers are plain text);
+the fragment list already carries its own space separators."
+  (format nil "~{~a~}" (mapcar #'first (module-fragments modules))))
 
 (defun render-text-line (instances)
   "Compose the LEFT | CENTER | RIGHT line."

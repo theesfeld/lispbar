@@ -128,20 +128,23 @@ Splits on top-level brace boundaries; ignores braces inside strings."
 
 ;;; ---- The module ----
 
-(defun render-workspaces (names focused)
-  "Render NAMES as a space-separated string, wrapping FOCUSED in brackets."
-  (with-output-to-string (out)
-    (loop for first = t then nil
-          for n in names
-          do (unless first (write-string *workspaces-separator* out))
-             (cond
-               ((string= n focused)
-                (write-string (car *workspaces-brackets*) out)
-                (write-string n out)
-                (write-string (cdr *workspaces-brackets*) out))
-               (t (write-string n out))))))
+(defun workspace-fragments (names focused)
+  "Build a list of (TEXT FACE) pairs for NAMES, marking FOCUSED accent."
+  (let (frags first)
+    (setf first t)
+    (dolist (n names)
+      (unless first
+        (push (list *workspaces-separator* :muted) frags))
+      (setf first nil)
+      (cond
+        ((string= n focused)
+         (push (list (car *workspaces-brackets*) :muted)  frags)
+         (push (list n :accent)                          frags)
+         (push (list (cdr *workspaces-brackets*) :muted)  frags))
+        (t (push (list n :normal) frags))))
+    (nreverse frags)))
 
 (defmodule :workspaces (:doc "Active workspace list (Sway / Hyprland)."
                         :position :left :priority 80 :interval 0.5)
   (let ((data (workspaces-fetch)))
-    (and data (render-workspaces (first data) (second data)))))
+    (and data (list :fragments (workspace-fragments (first data) (second data))))))

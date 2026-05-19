@@ -17,4 +17,4 @@
 
 (defmodule :clock (:doc "Local time of day."
                    :position :right :priority 90 :interval 1.0)
-  (clock-now))
+  (list :text (clock-now) :face :accent))

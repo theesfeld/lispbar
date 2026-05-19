@@ -50,5 +50,8 @@ non-zero exit or missing binary."
   (let ((s (or (audio-via-wpctl) (audio-via-pactl))))
     (when s
       (if (getf s :muted)
-          "MUTE"
-          (format nil "VOL ~d%" (getf s :volume))))))
+          (list :text "MUTE" :face :muted)
+          (let* ((vol (getf s :volume))
+                 (face (cond ((> vol 100) :warn)
+                             (t           :normal))))
+            (list :text (format nil "VOL ~d%" vol) :face face))))))

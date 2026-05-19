@@ -73,7 +73,9 @@ Example:
 
 (defun module-output (module)
   "Run MODULE's update function (respecting its interval) and return
-the latest output string.  Caches the result between intervals."
+its latest output.  An update function may return either a string
+or a plist of the form (:text STRING :face FACE) where FACE is one
+of :normal :accent :ok :warn :urgent :muted."
   (let* ((now  (get-internal-real-time))
          (per-sec internal-time-units-per-second)
          (elapsed (/ (- now (module-last-run module)) per-sec)))
@@ -89,7 +91,35 @@ the latest output string.  Caches the result between intervals."
             (module-last-output module)))
         (module-last-output module))))
 
+(defun module-output-text (value)
+  "Return the display string for a module output VALUE, or NIL."
+  (cond ((null value)    nil)
+        ((stringp value) (and (plusp (length value)) value))
+        ((consp value)
+         (cond ((getf value :fragments)
+                (format nil "~{~a~}"
+                        (mapcar #'first (getf value :fragments))))
+               (t (let ((s (getf value :text)))
+                    (and s (plusp (length s)) s)))))))
+
+(defun module-output-face (value)
+  "Return the face keyword for VALUE, defaulting to :normal."
+  (cond ((consp value) (or (getf value :face) :normal))
+        (t :normal)))
+
+(defun module-output-fragments (value)
+  "Return a list of (TEXT FACE) pairs that represent VALUE.
+A simple string yields one fragment with :normal face; a (:text X
+:face Y) plist yields one fragment with face Y; a (:fragments
+((T1 F1) (T2 F2) ...)) plist passes its list through verbatim."
+  (cond ((null value) nil)
+        ((stringp value) (list (list value :normal)))
+        ((consp value)
+         (or (getf value :fragments)
+             (let ((s (getf value :text)))
+               (and s (plusp (length s))
+                    (list (list s (or (getf value :face) :normal)))))))))
+
 (defun format-module (module)
   "Return MODULE's current display string, or NIL if it has no output."
-  (let ((s (module-output module)))
-    (and s (not (zerop (length s))) s)))
+  (module-output-text (module-output module)))

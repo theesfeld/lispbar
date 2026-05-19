@@ -15,7 +15,10 @@
 
 (defmodule :bluetooth (:doc "Adapter state and connection count."
                        :position :right :priority 50 :interval 10.0)
-  (cond ((not (uiop:getenv "PATH")) nil)
-        ((not (bt-powered-p)) "BT off")
-        (t (let ((n (bt-connected-count)))
-             (if (plusp n) (format nil "BT on/~d" n) "BT on")))))
+  (cond ((not (bt-powered-p))
+         (list :text "BT off" :face :muted))
+        (t
+         (let ((n (bt-connected-count)))
+           (if (plusp n)
+               (list :text (format nil "BT on/~d" n) :face :ok)
+               (list :text "BT on" :face :normal))))))
