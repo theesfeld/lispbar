@@ -49,6 +49,13 @@ struct wltray_item {
     /* ARGB32 ints, host byte order.  Owned by wltray; valid until
      * the next wltray_poll() or wltray_shutdown(). */
     const uint32_t *pixmap;
+    /* When the SNI item provided only an IconName, we resolve it
+     * against the freedesktop icon theme and load the PNG into
+     * `icon_path' (NULL-terminated absolute path to the file).
+     * Lisp can paint that path with cairo_image_surface_create_from_png.
+     * NULL when no icon-theme match was found or the item already
+     * had an inline pixmap. */
+    const char *icon_path;
 };
 
 int  wltray_item_count(void);

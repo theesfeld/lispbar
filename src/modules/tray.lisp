@@ -32,7 +32,8 @@ fails; the tray module then stays silent.")
   (has-pixmap :int)
   (pixmap-w   :int)
   (pixmap-h   :int)
-  (pixmap     :pointer))
+  (pixmap     :pointer)
+  (icon-path  :string))
 
 (cffi:defcfun ("wltray_init"        wltray-c-init)        :int)
 (cffi:defcfun ("wltray_shutdown"    wltray-c-shutdown)    :void)
@@ -102,10 +103,11 @@ wltray-c-poll for D-Bus traffic.")
 
 (defstruct tray-fragment
   "Internal: one tray item, ready to render."
-  (kind :text)       ; :pixmap | :text
+  (kind :text)       ; :pixmap | :icon-file | :text
   pixmap-pointer
   pixmap-w
   pixmap-h
+  icon-path          ; absolute PNG/SVG path (when kind is :icon-file)
   label
   index)             ; original index into the C-side array
 
@@ -119,15 +121,17 @@ to render.  Drives the C poll cycle first so metadata is fresh."
             (frags nil))
         (dotimes (i n)
           (when (eql 1 (wltray-c-item-get i it))
-            (let* ((has-pix (cffi:foreign-slot-value
-                              it '(:struct wltray-item) 'has-pixmap))
-                   (id     (cffi:foreign-slot-value
-                             it '(:struct wltray-item) 'id))
-                   (title  (cffi:foreign-slot-value
-                             it '(:struct wltray-item) 'title))
-                   (label  (or (and title (plusp (length title)) title)
-                               (and id (plusp (length id)) id)
-                               "?")))
+            (let* ((has-pix   (cffi:foreign-slot-value
+                                it '(:struct wltray-item) 'has-pixmap))
+                   (icon-path (cffi:foreign-slot-value
+                                it '(:struct wltray-item) 'icon-path))
+                   (id        (cffi:foreign-slot-value
+                                it '(:struct wltray-item) 'id))
+                   (title     (cffi:foreign-slot-value
+                                it '(:struct wltray-item) 'title))
+                   (label     (or (and title (plusp (length title)) title)
+                                  (and id (plusp (length id)) id)
+                                  "?")))
               (cond
                 ((not (zerop has-pix))
                  (push (make-tray-fragment
@@ -140,6 +144,12 @@ to render.  Drives the C poll cycle first so metadata is fresh."
                                      it '(:struct wltray-item) 'pixmap-h)
                          :label label
                          :index i)
+                       frags))
+                ((and icon-path (plusp (length icon-path)))
+                 (push (make-tray-fragment :kind :icon-file
+                                            :icon-path icon-path
+                                            :label label
+                                            :index i)
                        frags))
                 (*tray-show-text-when-no-icon*
                  (push (make-tray-fragment :kind :text

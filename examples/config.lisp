@@ -214,13 +214,20 @@
 ;;; 7.  Hover tooltips
 ;;; ==========================================================
 ;;;
-;;; Every module may declare `:tooltip' (a string or a thunk
-;;; returning a string) that's drawn as an overlay above the
-;;; module's pixel range while the pointer hovers over it.  The
-;;; built-in modules already expose useful tooltips - hover the
-;;; clock to see the date, the battery to see time-remaining, etc.
+;;; Every module may declare `:tooltip' (a string, a function of
+;;; no args, or a symbol naming such a function) which is drawn
+;;; as a floating overlay just below the module while the pointer
+;;; hovers over it.  The tooltip is a separate wlr-layer-shell
+;;; surface anchored to the bar's edge, so it can extend BEYOND
+;;; the bar's vertical bounds - it doesn't have to fit inside the
+;;; bar height.
 ;;;
-;;; Visual tuning of the tooltip overlay:
+;;; The built-in modules already expose useful tooltips: hover
+;;; the clock for the full date, the audio module for verbose
+;;; volume/mute state, the network module to see the device
+;;; details, etc.
+;;;
+;;; Visual tuning:
 
 ;;   (R G B A) doubles 0.0-1.0   Built-in default: (0 0 0 0.85)
 (setf *wayland-tooltip-bg* '(0.10 0.12 0.18 0.92))
