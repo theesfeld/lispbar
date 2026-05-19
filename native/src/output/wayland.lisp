@@ -12,7 +12,17 @@
 ;;; ---------- CFFI / library loading ----------
 
 (cffi:define-foreign-library libwlbar
-  (:unix (:or "libwlbar.so" "./libwlbar.so" "../cshim/libwlbar.so"))
+  ;; Search in this order:
+  ;;   1. /usr/local/lib/lispbar  (default install prefix)
+  ;;   2. /usr/lib/lispbar        (distribution install prefix)
+  ;;   3. ./cshim/libwlbar.so     (in-tree development)
+  ;;   4. ./libwlbar.so           (next to the binary)
+  ;;   5. plain `libwlbar.so'     (let ld.so resolve via LD_LIBRARY_PATH)
+  (:unix (:or "/usr/local/lib/lispbar/libwlbar.so"
+              "/usr/lib/lispbar/libwlbar.so"
+              "./cshim/libwlbar.so"
+              "./libwlbar.so"
+              "libwlbar.so"))
   (t (:default "libwlbar")))
 
 (cffi:define-foreign-library libcairo

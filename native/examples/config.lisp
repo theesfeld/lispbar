@@ -4,9 +4,9 @@
 ;;;; reads it on startup.  Forms are evaluated top-to-bottom; later
 ;;;; forms override earlier ones.
 
-(placement :left   (:clock))
-(placement :center ())
-(placement :right  (:cpu :memory :audio :bluetooth :brightness :battery))
+(placement :left   (:workspaces))
+(placement :center (:media))
+(placement :right  (:cpu :memory :audio :bluetooth :brightness :battery :clock))
 
 ;; Refresh interval for the main loop (seconds).
 (tick 1.0)

@@ -23,7 +23,9 @@
                                (:file "battery")
                                (:file "audio")
                                (:file "bluetooth")
-                               (:file "brightness")))
+                               (:file "brightness")
+                               (:file "workspaces")
+                               (:file "media")))
                  (:module "output"
                   :components ((:file "stdout")
                                (:file "wayland")))

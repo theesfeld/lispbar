@@ -16,15 +16,18 @@ lispbar: $(wildcard src/*.lisp src/modules/*.lisp src/output/*.lisp) \
 	  $(SBCL) --non-interactive --load build.lisp
 
 install: build
-	install -Dm755 lispbar $(DESTDIR)$(PREFIX)/bin/lispbar
+	install -Dm755 lispbar           $(DESTDIR)$(PREFIX)/bin/lispbar
 	install -Dm755 cshim/libwlbar.so $(DESTDIR)$(PREFIX)/lib/lispbar/libwlbar.so
 	install -Dm644 examples/config.lisp \
-	  $(DESTDIR)/usr/share/lispbar/example-config.lisp
+	  $(DESTDIR)$(PREFIX)/share/lispbar/example-config.lisp
+	install -Dm644 systemd/lispbar.service \
+	  $(DESTDIR)$(PREFIX)/lib/systemd/user/lispbar.service
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/lispbar
 	rm -f $(DESTDIR)$(PREFIX)/lib/lispbar/libwlbar.so
-	rm -f $(DESTDIR)/usr/share/lispbar/example-config.lisp
+	rm -f $(DESTDIR)$(PREFIX)/share/lispbar/example-config.lisp
+	rm -f $(DESTDIR)$(PREFIX)/lib/systemd/user/lispbar.service
 
 run: build
 	LD_LIBRARY_PATH=$(CURDIR)/cshim:$$LD_LIBRARY_PATH ./lispbar
