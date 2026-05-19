@@ -72,6 +72,23 @@ int   wlbar_fd    (void);
 /* Returns 1 once every layer surface has been closed. */
 int   wlbar_closed(void);
 
+/* Pointer input -------------------------------------------------- */
+
+/* A queued pointer event.  Drained one-at-a-time by Lisp via
+ * wlbar_poll_pointer_event(); see linux/input-event-codes.h for
+ * button values (BTN_LEFT == 272, BTN_RIGHT == 273, BTN_MIDDLE == 274). */
+struct wlbar_pointer_event {
+    int    output_idx;   /* surface index the pointer was over */
+    double x, y;         /* last-known surface-local coordinates */
+    int    button;
+    int    pressed;      /* 1 = press, 0 = release */
+};
+
+/* Dequeue one pointer event into *OUT.  Returns 1 on success, 0 if
+ * the queue is empty.  Press events are queued; release events are
+ * dropped (consumers care about clicks, not motion). */
+int   wlbar_poll_pointer_event(struct wlbar_pointer_event *out);
+
 #ifdef __cplusplus
 }
 #endif

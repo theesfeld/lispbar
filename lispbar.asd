@@ -27,7 +27,9 @@
                                (:file "bluetooth")
                                (:file "brightness")
                                (:file "workspaces")
-                               (:file "media")))
+                               (:file "media")
+                               (:file "network")
+                               (:file "launcher")))
                  (:module "output"
                   :components ((:file "stdout")
                                (:file "wayland")))

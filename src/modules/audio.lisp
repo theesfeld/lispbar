@@ -45,8 +45,25 @@ non-zero exit or missing binary."
           (list :volume volume
                 :muted (and mute-out (search "yes" mute-out))))))))
 
+(defvar *audio-on-click* "pavucontrol || pwvucontrol"
+  "Shell command for left-click on the audio module.  NIL to disable.")
+(defvar *audio-on-middle-click* "pactl set-sink-mute @DEFAULT_SINK@ toggle"
+  "Shell command for middle-click - toggle mute by default.")
+
+(defun audio-left-click (_m _b _i)
+  (declare (ignore _m _b _i))
+  (when (and *audio-on-click* (plusp (length *audio-on-click*)))
+    (uiop:launch-program (list "sh" "-c" *audio-on-click*))))
+
+(defun audio-middle-click (_m _b _i)
+  (declare (ignore _m _b _i))
+  (when (and *audio-on-middle-click* (plusp (length *audio-on-middle-click*)))
+    (uiop:launch-program (list "sh" "-c" *audio-on-middle-click*))))
+
 (defmodule :audio (:doc "Volume + mute state of default sink."
-                   :position :right :priority 65 :interval 2.0)
+                   :position :right :priority 65 :interval 2.0
+                   :on-click ((:left   audio-left-click)
+                              (:middle audio-middle-click)))
   (let ((s (or (audio-via-wpctl) (audio-via-pactl))))
     (when s
       (if (getf s :muted)

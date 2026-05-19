@@ -52,6 +52,16 @@
    #:*workspaces-scope* #:*workspaces-brackets*
    #:*workspaces-separator* #:*workspaces-empty-text*
    #:workspace #:workspace-name #:workspace-output #:workspace-focused
+   #:*network-format-wifi* #:*network-format-ethernet*
+   #:*network-format-down* #:*network-show-bars* #:*network-bar-glyphs*
+   #:*network-on-click*
+   #:*audio-on-click* #:*audio-on-middle-click*
+   #:*bluetooth-on-click* #:*bluetooth-on-middle-click*
+   #:*launcher-label* #:*launcher-command* #:*launcher-on-right-click*
+
+   ;; Click dispatch (for users writing their own modules)
+   #:module-on-click #:dispatch-module-click #:run-module-action
+   #:button->key
 
    ;; Output drivers
    #:run-output #:*current-output*))
