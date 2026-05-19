@@ -46,5 +46,12 @@
    #:run-capture
    #:logmsg
 
+   ;; Per-module tunables (set via `setf' from config.lisp)
+   #:*clock-format*
+   #:*media-format* #:*media-max-length*
+   #:*workspaces-scope* #:*workspaces-brackets*
+   #:*workspaces-separator* #:*workspaces-empty-text*
+   #:workspace #:workspace-name #:workspace-output #:workspace-focused
+
    ;; Output drivers
    #:run-output #:*current-output*))

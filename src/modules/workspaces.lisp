@@ -1,42 +1,57 @@
 ;;;; workspaces.lisp  --  Active workspace list, driven by the compositor.
 ;;;;
-;;;; Auto-detects which compositor is running and shells out to the
-;;;; matching IPC tool:
-;;;;
-;;;;   Sway        $SWAYSOCK set         -> swaymsg -t get_workspaces -r
-;;;;   Hyprland    $HYPRLAND_INSTANCE_*  -> hyprctl -j workspaces  +
-;;;;                                        hyprctl -j activeworkspace
-;;;;
-;;;; Returns a string like  "1 [2] 3 4"  where the bracketed entry is
-;;;; the focused workspace.  Customise the brackets / separator via
-;;;; the variables below.
+;;;; Adapters per compositor return a uniform list of workspace
+;;;; records; a single, user-configurable filter then decides what
+;;;; to display.  The same filter works regardless of which
+;;;; compositor is detected, so adding a new compositor is just
+;;;; "write an adapter that returns records."
 
 (in-package #:lispbar)
 
+;;; ---- Public tunables ----
+
+(defvar *workspaces-scope* :current-output
+  "How to filter the workspace list.
+
+  :current-output - show only the workspaces that belong to the
+                    monitor currently in focus.  Sensible default
+                    for multi-monitor users; every compositor with
+                    per-output workspaces (Sway, Hyprland, niri)
+                    is filtered the same way.
+  :all            - show every workspace from every output.  May
+                    show duplicates on niri (where each output has
+                    its own 1, 2, 3 numbering).
+  :focused        - show only the workspace that currently has
+                    focus, nothing else.")
+
 (defvar *workspaces-brackets* '("[" . "]")
-  "Cons of (OPEN . CLOSE) wrapping the focused workspace.")
+  "Cons of (OPEN . CLOSE) wrapping the focused workspace name.")
 
 (defvar *workspaces-separator* " "
-  "String inserted between workspace names.")
+  "Text inserted between adjacent workspace names.")
 
-;;; ---- Tiny JSON token reader (good enough for workspace records) ----
-;;;
-;;; We only need a handful of fields per workspace.  Rather than pull
-;;; in cl-json, scan the JSON text for the specific tokens we want.
-;;; This is robust against most reasonable formatting but does NOT
-;;; understand backslash-escaped quotes inside names; compositors
-;;; don't emit those for workspace names in practice.
+(defvar *workspaces-empty-text* nil
+  "When non-NIL, the string displayed if the filter leaves zero
+workspaces (e.g. early in session before any are created).
+NIL keeps the module silent in that case.")
+
+;;; ---- Record type returned by every adapter ----
+
+(defstruct workspace
+  "One workspace, as reported by whichever compositor is running."
+  (name    "")
+  (output  nil)
+  (focused nil))
+
+;;; ---- JSON helpers (whitespace-tolerant; sufficient for IPC output) ----
 
 (defun skip-ws (text pos)
-  "Return the index of the first non-whitespace char at or after POS."
   (loop while (and (< pos (length text))
                    (member (char text pos) '(#\Space #\Tab #\Newline #\Return)))
         do (incf pos))
   pos)
 
 (defun find-value-start (text key)
-  "Return the index of the value following \"KEY\": in TEXT, or NIL.
-Tolerates arbitrary whitespace around the colon."
   (let* ((needle (format nil "\"~a\"" key))
          (start  (search needle text)))
     (when start
@@ -45,26 +60,21 @@ Tolerates arbitrary whitespace around the colon."
           (skip-ws text (1+ p)))))))
 
 (defun json-string-value (text key)
-  "Return the string value of KEY in TEXT, or NIL."
   (let ((p (find-value-start text key)))
     (when (and p (< p (length text)) (char= (char text p) #\"))
       (let ((end (position #\" text :start (1+ p))))
         (and end (subseq text (1+ p) end))))))
 
 (defun json-number-value (text key)
-  "Return the integer value of KEY in TEXT, or NIL."
   (let ((p (find-value-start text key)))
     (when p (parse-integer text :start p :junk-allowed t))))
 
 (defun json-bool-value (text key)
-  "Return T when KEY's value is the literal `true' in TEXT."
   (let ((p (find-value-start text key)))
     (and p (<= (+ p 4) (length text))
          (string= text "true" :start1 p :end1 (+ p 4)))))
 
 (defun split-json-objects (text)
-  "Slice TEXT (a JSON array of objects) into a list of object strings.
-Splits on top-level brace boundaries; ignores braces inside strings."
   (let ((result nil) (depth 0) (start nil) (in-string nil))
     (loop for i from 0 below (length text)
           for c = (char text i) do
@@ -82,129 +92,153 @@ Splits on top-level brace boundaries; ignores braces inside strings."
                  (setf start nil)))))
     (nreverse result)))
 
-;;; ---- Compositor adapters ----
+;;; ---- Compositor adapters: each returns (LIST OF WORKSPACE) or NIL ----
 
 (defun workspaces-sway ()
-  "Return (NAMES FOCUSED-NAME) for Sway, or NIL on failure."
+  "Return every workspace Sway knows about."
   (let ((out (run-capture "swaymsg" "-t" "get_workspaces" "-r")))
     (when out
-      (let (names focused)
-        (dolist (obj (split-json-objects out))
-          (let ((name (json-string-value obj "name")))
-            (when name
-              (push name names)
-              (when (json-bool-value obj "focused")
-                (setf focused name)))))
-        (when names (list (nreverse names) focused))))))
+      (loop for obj in (split-json-objects out)
+            for name = (json-string-value obj "name")
+            when name collect
+              (make-workspace
+                :name    name
+                :output  (json-string-value obj "output")
+                :focused (json-bool-value obj "focused"))))))
 
 (defun workspaces-hyprland ()
-  "Return (NAMES FOCUSED-NAME) for Hyprland, or NIL on failure."
+  "Return every workspace Hyprland knows about."
   (let ((all    (run-capture "hyprctl" "-j" "workspaces"))
         (active (run-capture "hyprctl" "-j" "activeworkspace")))
     (when (and all active)
-      (let ((focused (json-string-value active "name"))
-            (entries (split-json-objects all))
-            names ids)
-        ;; Sort by id so workspaces appear in numeric order.
-        (dolist (e entries)
-          (let ((id (json-number-value e "id"))
-                (n  (json-string-value e "name")))
-            (when (and id n)
-              (push (cons id n) ids))))
-        (setf names (mapcar #'cdr (sort ids #'< :key #'car)))
-        (and names (list names focused))))))
+      (let ((focused-name (json-string-value active "name"))
+            (records nil))
+        (dolist (e (split-json-objects all))
+          (let ((n  (json-string-value e "name"))
+                (id (json-number-value e "id"))
+                (m  (json-string-value e "monitor")))
+            (when (and n id)
+              (push (cons id
+                          (make-workspace
+                            :name n
+                            :output m
+                            :focused (and focused-name (string= n focused-name))))
+                    records))))
+        (mapcar #'cdr (sort records #'< :key #'car))))))
 
 (defun workspaces-niri ()
-  "Return (NAMES FOCUSED-NAME) for niri, or NIL on failure.
-
-niri exposes a JSON IPC: `niri msg --json workspaces' returns an
-array of workspace objects.  Each object has at least:
-
-  {\"id\": N, \"idx\": N, \"name\": STRING|null,
-   \"output\": \"DP-1\", \"is_focused\": true|false, ...}
-
-niri workspaces are per-output (every monitor has its own 1, 2, 3,
-...), so showing them all on every bar gives confusing duplicates.
-We pick whichever output currently has focus and show only that
-output's workspaces.  Names fall back to numeric idx so unnamed
-workspaces still appear as `1', `2', ..."
+  "Return every workspace niri knows about.
+Uses `niri msg --json workspaces' (the JSON IPC); returns NIL on
+older niri builds that don't support it."
   (let ((out (run-capture "niri" "msg" "--json" "workspaces")))
     (when out
-      (let* ((entries (split-json-objects out))
-             (focused-output
-              (loop for e in entries
-                    when (json-bool-value e "is_focused")
-                    return (json-string-value e "output")))
-             ids focused)
-        (dolist (e entries)
-          (let* ((output (json-string-value e "output"))
-                 (name   (json-string-value e "name"))
-                 (idx    (json-number-value e "idx"))
-                 (label  (or (and name (plusp (length name)) name)
-                             (and idx (format nil "~d" idx))))
-                 (focus  (json-bool-value e "is_focused")))
-            (when (and label
-                       (or (null focused-output)
-                           (and output (string= output focused-output))))
-              (push (cons (or idx 0) label) ids)
-              (when focus (setf focused label)))))
-        (let ((names (mapcar #'cdr (sort ids #'< :key #'car))))
-          (and names (list names focused)))))))
+      (let ((records nil))
+        (dolist (e (split-json-objects out))
+          (let* ((idx (json-number-value e "idx"))
+                 (n   (json-string-value e "name"))
+                 (label (or (and n (plusp (length n))) n
+                            (and idx (format nil "~d" idx)))))
+            (when label
+              (push (cons (or idx 0)
+                          (make-workspace
+                            :name    label
+                            :output  (json-string-value e "output")
+                            :focused (json-bool-value e "is_focused")))
+                    records))))
+        (mapcar #'cdr (sort records #'< :key #'car))))))
+
+;;; ---- Adapter selection (cached) ----
 
 (defvar *workspaces-source-cache* :unprobed
-  "Cached result of `detect-workspaces-source' to avoid spawning IPC
-helper processes on every tick.")
+  "Cached compositor detection result.  Set to :unprobed on first
+call so callers re-detect on demand.")
 
 (defun detect-workspaces-source ()
-  "Return :sway, :hyprland, :niri, or NIL.
-Looks at the obvious env vars first, then falls back to probing the
-IPC helper itself in case env vars didn't propagate (which happens
-when the bar is started by a service manager rather than the
-compositor's exec hook).  The result is cached after first call."
+  "Return :sway, :hyprland, :niri, or NIL.  Env vars first, then
+fall back to probing the IPC tool itself in case env vars didn't
+propagate to this process.  Result is cached for the lifetime of
+the process."
   (unless (eq *workspaces-source-cache* :unprobed)
     (return-from detect-workspaces-source *workspaces-source-cache*))
   (let ((source
          (or (and (uiop:getenv "SWAYSOCK")                    :sway)
              (and (uiop:getenv "HYPRLAND_INSTANCE_SIGNATURE") :hyprland)
              (and (uiop:getenv "NIRI_SOCKET")                 :niri)
-             ;; Env vars absent - probe the IPC helpers themselves.
              (and (run-capture "swaymsg" "--version")         :sway)
              (and (run-capture "hyprctl" "version")           :hyprland)
              (and (run-capture "niri"    "msg" "version")     :niri))))
-    (when source
-      (logmsg :info "workspaces backend detected: ~a" source))
-    (unless source
-      (logmsg :debug "no workspaces backend detected (sway/hyprland/niri); ~
-module will stay silent"))
+    (cond (source (logmsg :info "workspaces backend detected: ~a" source))
+          (t      (logmsg :debug "no workspaces backend detected; module silent")))
     (setf *workspaces-source-cache* source)
     source))
 
 (defun workspaces-fetch ()
-  "Return (NAMES FOCUSED) for the active compositor, or NIL."
+  "Return every workspace the active compositor knows about, as a
+list of WORKSPACE records.  Returns NIL when no compositor is
+detected or its IPC fails."
   (case (detect-workspaces-source)
     (:sway     (workspaces-sway))
     (:hyprland (workspaces-hyprland))
     (:niri     (workspaces-niri))))
 
-;;; ---- The module ----
+;;; ---- The configurable filter, identical across all compositors ----
 
-(defun workspace-fragments (names focused)
-  "Build a list of (TEXT FACE) pairs for NAMES, marking FOCUSED accent."
+(defun apply-workspaces-scope (records)
+  "Apply `*workspaces-scope*' to RECORDS, returning the filtered list."
+  (case *workspaces-scope*
+    (:all records)
+    (:focused
+     (remove-if-not #'workspace-focused records))
+    (:current-output
+     (let ((focused-output
+            (loop for r in records
+                  when (and (workspace-focused r)
+                            (workspace-output r))
+                  return (workspace-output r))))
+       (cond
+         ;; No focused output known -> can't filter, show everything.
+         ((null focused-output) records)
+         (t (remove-if-not
+             (lambda (r)
+               ;; Keep records whose output matches, or where the
+               ;; backend didn't tell us the output (better to show
+               ;; than to silently drop).
+               (or (null (workspace-output r))
+                   (string= (workspace-output r) focused-output)))
+             records)))))
+    (t records)))
+
+;;; ---- Rendering ----
+
+(defun workspace-fragments-from-records (records)
   (let (frags first)
     (setf first t)
-    (dolist (n names)
+    (dolist (r records)
       (unless first
         (push (list *workspaces-separator* :muted) frags))
       (setf first nil)
-      (cond
-        ((string= n focused)
-         (push (list (car *workspaces-brackets*) :muted)  frags)
-         (push (list n :accent)                          frags)
-         (push (list (cdr *workspaces-brackets*) :muted)  frags))
-        (t (push (list n :normal) frags))))
+      (let ((n         (workspace-name r))
+            (focused-p (workspace-focused r)))
+        (cond
+          (focused-p
+           (push (list (car *workspaces-brackets*) :muted) frags)
+           (push (list n                           :accent) frags)
+           (push (list (cdr *workspaces-brackets*) :muted) frags))
+          (t (push (list n :normal) frags)))))
     (nreverse frags)))
 
-(defmodule :workspaces (:doc "Active workspace list (Sway / Hyprland)."
-                        :position :left :priority 80 :interval 0.5)
-  (let ((data (workspaces-fetch)))
-    (and data (list :fragments (workspace-fragments (first data) (second data))))))
+(defmodule :workspaces
+  (:doc "Active workspaces (Sway / Hyprland / niri).  Scope is
+configurable via *workspaces-scope* (see docstring)."
+   :position :left :priority 80 :interval 0.5)
+  (let ((records (workspaces-fetch)))
+    (cond
+      ((null records) nil)
+      (t
+       (let ((filtered (apply-workspaces-scope records)))
+         (cond
+           (filtered
+            (list :fragments (workspace-fragments-from-records filtered)))
+           (*workspaces-empty-text*
+            (list :text *workspaces-empty-text* :face :muted))
+           (t nil)))))))
