@@ -30,11 +30,13 @@
 ;;   :bluetooth   - adapter state and connection count
 ;;   :brightness  - backlight percentage
 ;;   :tray        - StatusNotifierItem system tray (D-Bus)
+;;   :registry    - click-to-open community module/theme browser
+;;                  (needs fzf installed; spawns a terminal)
 
 (placement :left   (:launcher :workspaces))
 (placement :center (:media))
 (placement :right  (:cpu :memory :network :audio :bluetooth :brightness
-                    :battery :tray :clock))
+                    :battery :tray :registry :clock))
 
 ;;; ==========================================================
 ;;; 2.  Geometry
@@ -149,6 +151,20 @@
 
 ;; ----- :cpu, :memory -----
 ;; No tunables exposed.
+
+;; ----- :registry -----
+;; The label glyph, the terminal used to host `lispbar registry browse',
+;; and an optional override for the on-click shell command.
+;;
+;;   string | NIL                Built-in default: "📦"
+(setf *registry-label*    "📦")
+;;   shell expression           Built-in default tries $TERMINAL, foot,
+;;                              alacritty, kitty, wezterm, gnome-terminal,
+;;                              konsole, xterm in that order.
+(setf *registry-terminal* "$TERMINAL || foot || alacritty || kitty || wezterm || gnome-terminal || konsole || xterm")
+;;   string | NIL                Built-in default: NIL (use the terminal-spawn)
+;;                              Set this to drive the picker yourself.
+(setf *registry-on-click* nil)
 
 ;; ----- :launcher -----
 ;; Command for left/right click.

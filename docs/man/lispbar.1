@@ -93,6 +93,15 @@ is one of:
 List every item in the registry.  Items already installed are marked
 with
 .BR * .
+.IP "\fBbrowse\fR" 4
+Interactive
+.B fzf
+picker over the registry, with a live preview showing
+.B info
+output for the highlighted item.  Enter installs / refreshes the
+selection; Esc cancels.  Requires
+.B fzf
+on PATH.
 .IP "\fBinfo\fR \fINAME\fR" 4
 Show metadata for one item:  source URL, SHA-256, author, runtime
 dependencies, and install status.

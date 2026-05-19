@@ -30,7 +30,8 @@
                                (:file "media")
                                (:file "network")
                                (:file "launcher")
-                               (:file "tray")))
+                               (:file "tray")
+                               (:file "registry")))
                  (:module "output"
                   :components ((:file "stdout")
                                (:file "wayland")))

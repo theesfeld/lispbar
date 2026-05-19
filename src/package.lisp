@@ -78,6 +78,8 @@
 
    ;; Registry
    #:*registry-base-url* #:*registry-cache-ttl*
+   #:*registry-browse-tool*
+   #:*registry-label* #:*registry-terminal* #:*registry-on-click*
    #:registry-load #:registry-install #:registry-remove
-   #:registry-update-installed
+   #:registry-update-installed #:registry-browse
    #:do-registry))

@@ -278,6 +278,86 @@ sha differs from the manifest's."
     (format t "~%~d touched, ~d ok, ~d failed.~%" touched ok bad)
     (if (zerop bad) 0 1)))
 
+;;; ---- Interactive browser (fzf) ----
+
+(defvar *registry-browse-tool* "fzf"
+  "External fuzzy-finder used by `lispbar registry browse'.  fzf is
+the default; set to NIL to disable interactive browse entirely.")
+
+(defun registry-browse-lines ()
+  "Build the line-per-item input that gets piped into fzf."
+  (with-output-to-string (s)
+    (dolist (cell (registry-items-sorted))
+      (let* ((name (car cell))
+             (v (cdr cell))
+             (installed-p (gethash name *registry-installed*)))
+        (format s "~a ~14a ~8a ~a~%"
+                (if installed-p "*" "·")
+                (registry-display-name name)
+                (string-downcase (symbol-name (getf v :kind)))
+                (or (getf v :doc) ""))))))
+
+(defun registry-browse ()
+  "Open an interactive fzf picker over the registry.  Enter installs
+the highlighted item (re-downloading if it's already installed)."
+  (cond
+    ((or (null *registry-browse-tool*)
+         (not (executable-find-check *registry-browse-tool*)))
+     (format *error-output*
+             "lispbar: `registry browse' needs ~a on PATH.~%~
+              Install fzf (https://github.com/junegunn/fzf) or use~%~
+              `lispbar registry list' / `install' instead.~%"
+             (or *registry-browse-tool* "fzf"))
+     1)
+    (t
+     (registry-load)
+     (cond
+       ((zerop (hash-table-count *registry-items*))
+        (format *error-output*
+                "lispbar: registry is empty or unreachable.  Check ~a~%"
+                *registry-base-url*)
+        1)
+       (t
+        (registry-state-load)
+        (let* ((input (registry-browse-lines))
+               (selection
+                 (handler-case
+                     (uiop:run-program
+                      (list *registry-browse-tool*
+                            "--prompt=registry> "
+                            "--header"
+                            "Enter installs/refreshes  Esc cancels  * = installed"
+                            "--preview" "lispbar registry info {2}"
+                            "--preview-window=right:55%:wrap"
+                            "--height=80%"
+                            "--reverse"
+                            "--no-mouse")
+                      :input (make-string-input-stream input)
+                      :output :string
+                      :error-output :interactive
+                      :ignore-error-status t)
+                   (error (c)
+                     (logmsg :warn "registry browse: ~a" c)
+                     nil))))
+          (cond
+            ((or (null selection)
+                 (zerop (length (string-trim '(#\Space #\Newline) selection))))
+             0)
+            (t
+             (let* ((line  (first (uiop:split-string
+                                    selection :separator '(#\Newline))))
+                    (toks  (remove-if (lambda (x) (zerop (length x)))
+                                      (uiop:split-string
+                                        line :separator '(#\Space #\Tab))))
+                    (name  (and (>= (length toks) 2)
+                                (cli-name->keyword (second toks)))))
+               (cond
+                 ((null name)
+                  (format *error-output* "lispbar: couldn't parse selection: ~s~%"
+                          line)
+                  1)
+                 (t (registry-install name))))))))))))
+
 ;;; ---- CLI ----
 
 (defun registry-print-list (&optional kind-filter)
@@ -370,6 +450,8 @@ keyword `:WEATHER'.  Strips a leading colon if present."
       ((null sub) (registry-help) 0)
       ((string= sub "list")
        (registry-print-list (getf opts :kind)))
+      ((or (string= sub "browse") (string= sub "select"))
+       (registry-browse))
       ((string= sub "info")
        (cond (item (registry-print-info
                       (cli-name->keyword item)))
@@ -397,6 +479,7 @@ keyword `:WEATHER'.  Strips a leading colon if present."
 
 Subcommands:
   list [--kind module|theme]   Browse the registry inventory.
+  browse                       Interactive fzf picker (preview + install).
   info NAME                    Show details for one item.
   install NAME                 Download and verify into XDG_CONFIG_HOME.
   remove  NAME                 Delete an installed item.
