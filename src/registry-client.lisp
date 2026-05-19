@@ -30,7 +30,9 @@ on demand by any of list / info / install.")
 ;;; ---- Manifest in-memory model ----
 
 (defvar *registry-items* (make-hash-table :test #'eq)
-  "NAME -> plist with :kind :file :sha256 :doc :author :requires.")
+  "NAME -> plist with the manifest's per-item fields:
+   :kind :file :sha256 :summary :description :version :license
+   :homepage :tags :added :updated :author :requires.")
 
 (defvar *registry-loaded* nil
   "Universal time of the last manifest load, or NIL if not loaded.")
@@ -295,7 +297,7 @@ the default; set to NIL to disable interactive browse entirely.")
                 (if installed-p "*" "·")
                 (registry-display-name name)
                 (string-downcase (symbol-name (getf v :kind)))
-                (or (getf v :doc) ""))))))
+                (or (getf v :summary) (getf v :doc) ""))))))
 
 (defun registry-browse ()
   "Open an interactive fzf picker over the registry.  Enter installs
@@ -379,7 +381,7 @@ the highlighted item (re-downloading if it's already installed)."
                  mark
                  (string-downcase (symbol-name (getf v :kind)))
                  (string-downcase (symbol-name name))
-                 (or (getf v :doc) ""))))
+                 (or (getf v :summary) (getf v :doc) ""))))
      (format t "~%* = installed.  Use `lispbar registry install NAME' / `remove NAME'.~%")
      0)))
 
@@ -393,20 +395,34 @@ the highlighted item (re-downloading if it's already installed)."
        (format *error-output* "lispbar: no such registry item: ~a~%" disp)
        1)
       (t
-       (let ((installed (gethash name *registry-installed*)))
-         (format t "Name      : ~a~%" disp)
-         (format t "Kind      : ~(~a~)~%" (getf v :kind))
-         (format t "File      : ~a~%" (getf v :file))
-         (format t "URL       : ~a/~a~%" *registry-base-url* (getf v :file))
-         (format t "SHA-256   : ~a~%" (getf v :sha256))
-         (format t "Doc       : ~a~%" (or (getf v :doc) ""))
-         (format t "Author    : ~a~%" (or (getf v :author) "(unknown)"))
-         (format t "Requires  : ~{~a~^, ~}~%"
+       (let ((installed (gethash name *registry-installed*))
+             (description (getf v :description)))
+         (format t "Name        : ~a~%" disp)
+         (format t "Kind        : ~(~a~)~%" (getf v :kind))
+         (format t "Summary     : ~a~%"
+                 (or (getf v :summary) (getf v :doc) ""))
+         (format t "Version     : ~a~%" (or (getf v :version) "(unspecified)"))
+         (format t "License     : ~a~%" (or (getf v :license) "(unspecified)"))
+         (format t "Author      : ~a~%" (or (getf v :author) "(unknown)"))
+         (when (getf v :homepage)
+           (format t "Homepage    : ~a~%" (getf v :homepage)))
+         (format t "Tags        : ~{~a~^, ~}~%"
+                 (or (getf v :tags) '("(none)")))
+         (format t "Added       : ~a~%" (or (getf v :added) "(unknown)"))
+         (format t "Updated     : ~a~%" (or (getf v :updated) "(unknown)"))
+         (format t "Requires    : ~{~a~^, ~}~%"
                  (or (getf v :requires) '("(nothing external)")))
-         (format t "Installed : ~a~%"
+         (format t "File        : ~a~%" (getf v :file))
+         (format t "URL         : ~a/~a~%" *registry-base-url* (getf v :file))
+         (format t "SHA-256     : ~a~%" (getf v :sha256))
+         (format t "Installed   : ~a~%"
                  (cond (installed
-                        (format nil "yes - ~a" (getf installed :file)))
+                        (format nil "yes — ~a" (getf installed :file)))
                        (t "no")))
+         (when description
+           (format t "~%Description :~%")
+           (dolist (line (uiop:split-string description :separator '(#\Newline)))
+             (format t "  ~a~%" line)))
          0)))))
 
 (defun parse-registry-args (argv)

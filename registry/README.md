@@ -41,21 +41,25 @@ SHA-256 checksums.  Currently:
 
 ### Modules
 
-| Name        | What                                                      | Requires |
-| ----------- | --------------------------------------------------------- | -------- |
-| `:weather`  | Current weather from wttr.in                              | `curl`   |
-| `:cputemp`  | CPU package temperature via lm_sensors                    | `sensors`|
-| `:diskspace`| Free space on a mount point                               | `df`     |
-| `:updates`  | Pending package updates (Gentoo/Arch/Debian/Fedora)        | varies   |
-| `:pomodoro` | 25/5 timer; click to start/pause, right-click to reset    | —        |
+| Name        | Version | Summary                                            | Requires | Added      |
+| ----------- | ------- | -------------------------------------------------- | -------- | ---------- |
+| `:weather`  | 1.0.0   | Current weather from wttr.in                       | `curl`   | 2026-05-19 |
+| `:cputemp`  | 1.0.0   | CPU package temperature via lm_sensors             | `sensors`| 2026-05-19 |
+| `:diskspace`| 1.0.0   | Free space on a mount point                        | `df`     | 2026-05-19 |
+| `:updates`  | 1.0.0   | Pending package updates (Gentoo/Arch/Debian/Fedora)| varies   | 2026-05-19 |
+| `:pomodoro` | 1.0.0   | 25/5 timer; click to start/pause                   | —        | 2026-05-19 |
 
 ### Themes
 
-| Name              | Source                                  |
-| ----------------- | --------------------------------------- |
-| `:tokyo-night`    | folke/tokyonight.nvim "storm" variant   |
-| `:solarized-dark` | Ethan Schoonover's Solarized            |
-| `:rose-pine`      | rose-pine.github.io main palette        |
+| Name              | Version | Source                                | Added      |
+| ----------------- | ------- | ------------------------------------- | ---------- |
+| `:tokyo-night`    | 1.0.0   | folke/tokyonight.nvim "storm" variant | 2026-05-19 |
+| `:solarized-dark` | 1.0.0   | Ethan Schoonover's Solarized          | 2026-05-19 |
+| `:rose-pine`      | 1.0.0   | rose-pine.github.io main palette      | 2026-05-19 |
+
+Full per-item metadata (version, license, tags, full description,
+SHA-256) lives in [manifest.lisp](manifest.lisp); also reachable with
+`lispbar registry info :NAME`.
 
 ## Submitting your own
 
