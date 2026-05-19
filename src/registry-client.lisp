@@ -321,44 +321,59 @@ the highlighted item (re-downloading if it's already installed)."
         1)
        (t
         (registry-state-load)
-        (let* ((input (registry-browse-lines))
-               (selection
-                 (handler-case
-                     (uiop:run-program
-                      (list *registry-browse-tool*
-                            "--prompt=registry> "
-                            "--header"
-                            "Enter installs/refreshes  Esc cancels  * = installed"
-                            "--preview" "lispbar registry info {2}"
-                            "--preview-window=right:55%:wrap"
-                            "--height=80%"
-                            "--reverse"
-                            "--no-mouse")
-                      :input (make-string-input-stream input)
-                      :output :string
-                      :error-output :interactive
-                      :ignore-error-status t)
-                   (error (c)
-                     (logmsg :warn "registry browse: ~a" c)
-                     nil))))
-          (cond
-            ((or (null selection)
-                 (zerop (length (string-trim '(#\Space #\Newline) selection))))
-             0)
-            (t
-             (let* ((line  (first (uiop:split-string
-                                    selection :separator '(#\Newline))))
-                    (toks  (remove-if (lambda (x) (zerop (length x)))
-                                      (uiop:split-string
-                                        line :separator '(#\Space #\Tab))))
-                    (name  (and (>= (length toks) 2)
-                                (cli-name->keyword (second toks)))))
-               (cond
-                 ((null name)
-                  (format *error-output* "lispbar: couldn't parse selection: ~s~%"
-                          line)
-                  1)
-                 (t (registry-install name))))))))))))
+        ;; Pipe candidates through real files instead of Lisp streams.
+        ;; fzf needs to talk to /dev/tty for its TUI; with `:input <stream>'
+        ;; + `:output :string' SBCL inserts pipes around fzf's stdio and
+        ;; the TUI never paints.  File-backed stdin/stdout sidesteps it.
+        (let* ((cache  (lispbar-cache-directory))
+               (in-f   (merge-pathnames "browse-input.txt"  cache))
+               (out-f  (merge-pathnames "browse-output.txt" cache))
+               (input  (registry-browse-lines)))
+          (ensure-directories-exist in-f)
+          (with-open-file (s in-f :direction :output
+                                  :if-exists :supersede
+                                  :if-does-not-exist :create)
+            (write-string input s))
+          (when (probe-file out-f) (delete-file out-f))
+          (handler-case
+              (uiop:run-program
+               (list *registry-browse-tool*
+                     "--prompt=registry> "
+                     "--header"
+                     "Enter installs/refreshes  Esc cancels  * = installed"
+                     "--preview" "lispbar registry info {2}"
+                     "--preview-window=right:55%:wrap"
+                     "--height=80%"
+                     "--reverse"
+                     "--no-mouse")
+               :input  in-f
+               :output out-f
+               :error-output :interactive
+               :ignore-error-status t)
+            (error (c)
+              (logmsg :warn "registry browse: ~a" c)))
+          (let ((selection (when (probe-file out-f)
+                             (uiop:read-file-string out-f))))
+            (ignore-errors (delete-file in-f))
+            (ignore-errors (delete-file out-f))
+            (cond
+              ((or (null selection)
+                   (zerop (length (string-trim '(#\Space #\Newline) selection))))
+               0)
+              (t
+               (let* ((line  (first (uiop:split-string
+                                      selection :separator '(#\Newline))))
+                      (toks  (remove-if (lambda (x) (zerop (length x)))
+                                        (uiop:split-string
+                                          line :separator '(#\Space #\Tab))))
+                      (name  (and (>= (length toks) 2)
+                                  (cli-name->keyword (second toks)))))
+                 (cond
+                   ((null name)
+                    (format *error-output* "lispbar: couldn't parse selection: ~s~%"
+                            line)
+                    1)
+                   (t (registry-install name)))))))))))))
 
 ;;; ---- CLI ----
 

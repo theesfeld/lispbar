@@ -158,10 +158,11 @@
 ;;
 ;;   string | NIL                Built-in default: "📦"
 (setf *registry-label*    "📦")
-;;   shell expression           Built-in default tries $TERMINAL, foot,
-;;                              alacritty, kitty, wezterm, gnome-terminal,
-;;                              konsole, xterm in that order.
-(setf *registry-terminal* "$TERMINAL || foot || alacritty || kitty || wezterm || gnome-terminal || konsole || xterm")
+;;   space-separated list       Built-in default tries $TERMINAL, footclient,
+;;                              foot, alacritty, kitty, wezterm,
+;;                              gnome-terminal, konsole, xterm in that order.
+;;                              First entry found on PATH wins.
+(setf *registry-terminal* "$TERMINAL footclient foot alacritty kitty wezterm gnome-terminal konsole xterm")
 ;;   string | NIL                Built-in default: NIL (use the terminal-spawn)
 ;;                              Set this to drive the picker yourself.
 (setf *registry-on-click* nil)
