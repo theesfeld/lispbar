@@ -299,6 +299,38 @@ the default; set to NIL to disable interactive browse entirely.")
                 (string-downcase (symbol-name (getf v :kind)))
                 (or (getf v :summary) (getf v :doc) ""))))))
 
+(defun cli-name->keyword (s)
+  "Turn a CLI argument like \":weather\" or \"weather\" into the
+keyword `:WEATHER'.  Strips a leading colon if present."
+  (let ((trimmed (if (and (plusp (length s)) (char= (char s 0) #\:))
+                     (subseq s 1)
+                     s)))
+    (intern (string-upcase trimmed) :keyword)))
+
+(defun parse-browse-selection (selection)
+  "Turn fzf's stdout into the keyword name of the highlighted item.
+SELECTION looks like a single line from `registry-browse-lines',
+e.g. `· :weather       module   Current weather from wttr.in'.
+
+Returns the keyword (e.g. `:WEATHER') or NIL when the input is
+empty, blank, or malformed.  Whitespace-only / multi-line input is
+tolerated: only the first non-blank line is parsed, and tokens are
+collapsed across runs of spaces and tabs.
+
+Pulled out of `registry-browse' so the parsing can be unit-tested
+without standing up an fzf subprocess.  Format coupled to the
+output of `registry-browse-lines' — keep the two in sync."
+  (when (and selection (stringp selection))
+    (let ((trimmed (string-trim '(#\Space #\Newline #\Tab) selection)))
+      (when (plusp (length trimmed))
+        (let* ((line (first (uiop:split-string
+                              trimmed :separator '(#\Newline))))
+               (toks (remove-if (lambda (x) (zerop (length x)))
+                                (uiop:split-string
+                                  line :separator '(#\Space #\Tab)))))
+          (when (>= (length toks) 2)
+            (cli-name->keyword (second toks))))))))
+
 (defun registry-browse ()
   "Open an interactive fzf picker over the registry.  Enter installs
 the highlighted item (re-downloading if it's already installed)."
@@ -361,28 +393,14 @@ the highlighted item (re-downloading if it's already installed)."
                :ignore-error-status t)
             (error (c)
               (logmsg :warn "registry browse: ~a" c)))
-          (let ((selection (when (probe-file out-f)
-                             (uiop:read-file-string out-f))))
+          (let* ((selection (when (probe-file out-f)
+                              (uiop:read-file-string out-f)))
+                 (name      (parse-browse-selection selection)))
             (ignore-errors (delete-file in-f))
             (ignore-errors (delete-file out-f))
             (cond
-              ((or (null selection)
-                   (zerop (length (string-trim '(#\Space #\Newline) selection))))
-               0)
-              (t
-               (let* ((line  (first (uiop:split-string
-                                      selection :separator '(#\Newline))))
-                      (toks  (remove-if (lambda (x) (zerop (length x)))
-                                        (uiop:split-string
-                                          line :separator '(#\Space #\Tab))))
-                      (name  (and (>= (length toks) 2)
-                                  (cli-name->keyword (second toks)))))
-                 (cond
-                   ((null name)
-                    (format *error-output* "lispbar: couldn't parse selection: ~s~%"
-                            line)
-                    1)
-                   (t (registry-install name)))))))))))))
+              ((null name) 0)
+              (t (registry-install name))))))))))
 
 ;;; ---- CLI ----
 
@@ -465,14 +483,6 @@ a plist of decisions."
     (setf (getf opts :positional)
           (nreverse (getf opts :positional)))
     opts))
-
-(defun cli-name->keyword (s)
-  "Turn a CLI argument like \":weather\" or \"weather\" into the
-keyword `:WEATHER'.  Strips a leading colon if present."
-  (let ((trimmed (if (and (plusp (length s)) (char= (char s 0) #\:))
-                     (subseq s 1)
-                     s)))
-    (intern (string-upcase trimmed) :keyword)))
 
 (defun do-registry (rest-argv &key config)
   "Entry point invoked from `main' when the first arg is `registry'."

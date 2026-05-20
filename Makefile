@@ -90,6 +90,7 @@ test: build
 	./lispbar --print-paths
 	./lispbar --once --output stdout
 	./lispbar --once --output json
+	sh tests/run-tests.sh
 
 clean:
 	rm -f lispbar

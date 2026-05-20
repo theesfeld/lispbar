@@ -25,7 +25,13 @@ Override if the auto-detection picks the wrong one:
   (setf *registry-terminal* \"foot -a registry\")
 
 `footclient' is listed before `foot' so users running a foot
-server get the snappier startup of the client variant.")
+server get the snappier startup of the client variant.
+
+NOTE: the value is interpolated directly into a shell command,
+so it must be a plain whitespace-separated list of program names
+(optionally with their own flags).  Don't put `&&', `||', shell
+substitutions other than `$TERMINAL', or anything else you
+wouldn't drop into `for t in …; do …; done'.")
 
 (defvar *registry-on-click* nil
   "Optional shell command run on left-click instead of the built-in
