@@ -325,16 +325,25 @@ the highlighted item (re-downloading if it's already installed)."
         ;; fzf needs to talk to /dev/tty for its TUI; with `:input <stream>'
         ;; + `:output :string' SBCL inserts pipes around fzf's stdio and
         ;; the TUI never paints.  File-backed stdin/stdout sidesteps it.
+        ;;
+        ;; Filenames are suffixed with the PID so two concurrent
+        ;; `registry browse' invocations (e.g. a hotkey-spawned browse
+        ;; while one's already open) don't clobber each other.
         (let* ((cache  (lispbar-cache-directory))
-               (in-f   (merge-pathnames "browse-input.txt"  cache))
-               (out-f  (merge-pathnames "browse-output.txt" cache))
+               (pid    #+sbcl (sb-posix:getpid) #-sbcl 0)
+               (in-f   (merge-pathnames
+                         (format nil "browse-input-~d.txt"  pid) cache))
+               (out-f  (merge-pathnames
+                         (format nil "browse-output-~d.txt" pid) cache))
                (input  (registry-browse-lines)))
           (ensure-directories-exist in-f)
+          ;; Defensive: clear any leftover from a crashed prior run.
+          (ignore-errors (delete-file in-f))
+          (ignore-errors (delete-file out-f))
           (with-open-file (s in-f :direction :output
                                   :if-exists :supersede
                                   :if-does-not-exist :create)
             (write-string input s))
-          (when (probe-file out-f) (delete-file out-f))
           (handler-case
               (uiop:run-program
                (list *registry-browse-tool*
